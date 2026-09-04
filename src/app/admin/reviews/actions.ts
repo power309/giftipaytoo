@@ -62,3 +62,13 @@ export async function replyToReview(input: z.infer<typeof replySchema>): Promise
   revalidatePath('/admin/reviews');
   return ok('پاسخ عمومی ثبت شد.');
 }
+
+/**
+ * Single entry point for the review list's bulk actions — see the note on
+ * `BulkAction` in `@/components/admin/data-table`: a Client Component can only
+ * receive a Server Action, never a plain callback.
+ */
+export async function runReviewBulkAction(key: string, ids: string[]): Promise<ActionResult> {
+  if (key === 'approve') return bulkApproveReviews(ids);
+  return { ok: false, error: 'عملیات ناشناخته است.' };
+}

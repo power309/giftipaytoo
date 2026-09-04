@@ -7,8 +7,8 @@ test.describe('authentication', () => {
     await expectPersianRtl(page);
     await expectNoAppError(page);
 
-    await page.locator('input').first().fill('nobody@example.invalid');
-    await page.locator('input[type="password"]').first().fill('WrongPassword!123');
+    await page.locator('input[name="identifier"]').fill('nobody@example.invalid');
+    await page.locator('input[name="password"]').fill('WrongPassword!123');
     await page.getByRole('button', { name: /ورود/ }).first().click();
 
     // A failed login must say so — never silently succeed.
@@ -19,7 +19,7 @@ test.describe('authentication', () => {
   test('register page renders its rules up front', async ({ page }) => {
     await page.goto('/auth/register');
     await expectNoAppError(page);
-    await expect(page.locator('input[type="password"]').first()).toBeVisible();
+    await expect(page.locator('input[name="password"]')).toBeVisible();
   });
 
   test('account area is gated for anonymous visitors', async ({ page }) => {

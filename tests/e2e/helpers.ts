@@ -7,13 +7,16 @@ export const SEED_ADMIN = {
 
 /** Signs in through the real login form and waits for the session to settle. */
 export async function login(page: Page, email: string, password: string) {
-  await page.goto('/auth/login');
-  await page.getByLabel(/ایمیل یا شماره موبایل|ایمیل|شماره موبایل/).first().fill(email);
-  await page.getByLabel(/گذرواژه|رمز عبور/).first().fill(password);
-  await Promise.all([
-    page.waitForLoadState('networkidle'),
-    page.getByRole('button', { name: /ورود/ }).first().click(),
-  ]);
+  await page.goto('/auth/login', { waitUntil: 'domcontentloaded' });
+  // Target the named fields directly: React Server Actions render several
+  // hidden $ACTION_* inputs before the real ones, so `input` .first() would
+  // resolve to a hidden element and fill() would hang on actionability.
+  await page.locator('input[name="identifier"]').fill(email);
+  await page.locator('input[name="password"]').fill(password);
+  await page.getByRole('button', { name: /ورود/ }).first().click();
+  // `networkidle` never settles on pages that keep a connection open, so wait
+  // for an actual navigation away from the login form instead.
+  await page.waitForURL((u) => !u.pathname.startsWith('/auth/login'), { timeout: 20_000 }).catch(() => {});
 }
 
 /** Fails the test if the page rendered a Next.js error boundary. */

@@ -20,9 +20,11 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
-  timeout: 60_000,
+  timeout: 45_000,
   expect: { timeout: 10_000 },
   use: {
+    actionTimeout: 15_000,
+    navigationTimeout: 30_000,
     baseURL,
     locale: 'fa-IR',
     timezoneId: 'Asia/Tehran',

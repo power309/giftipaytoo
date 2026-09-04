@@ -28,7 +28,7 @@ test.describe('accessibility', () => {
   for (const path of ['/', '/auth/login', '/cart', '/faq']) {
     test(`no critical or serious axe violations — ${path}`, async ({ page }) => {
       await page.goto(path);
-      await page.waitForLoadState('networkidle');
+      await page.waitForLoadState('domcontentloaded');
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])

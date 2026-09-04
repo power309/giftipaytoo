@@ -6,7 +6,7 @@ import { DataTable, type Column, type BulkAction } from '@/components/admin/data
 import { formatJalali } from '@/lib/persian';
 import { parseListQuery, type SearchParams } from '@/lib/admin-query';
 import { buildReviewsWhere } from './_lib';
-import { bulkApproveReviews } from './actions';
+import { runReviewBulkAction } from './actions';
 import { ReviewRowActions } from './row-actions';
 
 export const metadata = { title: 'دیدگاه‌ها' };
@@ -54,9 +54,7 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Prom
     { key: 'actions', header: '', align: 'end', render: (r) => <ReviewRowActions reviewId={r.id} status={r.status} adminReply={r.adminReplyFa} /> },
   ];
 
-  const bulkActions: BulkAction<ReviewRow>[] = [
-    { key: 'approve', label: 'تأیید گروهی', run: async (ids) => bulkApproveReviews(ids) },
-  ];
+  const bulkActions: BulkAction[] = [{ key: 'approve', label: 'تأیید گروهی' }];
 
   return (
     <div>
@@ -70,6 +68,7 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Prom
         searchPlaceholder="جست‌وجوی متن یا نویسنده…"
         emptyTitle="دیدگاهی یافت نشد"
         bulkActions={bulkActions}
+        onBulkAction={runReviewBulkAction}
         filters={[
           {
             key: 'status',

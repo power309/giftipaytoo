@@ -23,7 +23,7 @@ test.describe('storefront', () => {
     const firstCategory = page.locator('a[href^="/category/"]').first();
     await expect(firstCategory).toBeVisible();
     await firstCategory.click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expectNoAppError(page);
     await expect(page.locator('a[href^="/product/"]').first()).toBeVisible();
   });
@@ -31,7 +31,7 @@ test.describe('storefront', () => {
   test('product page shows variants, price and the region gate', async ({ page }) => {
     await page.goto('/');
     await page.locator('a[href^="/product/"]').first().click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expectNoAppError(page);
 
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();

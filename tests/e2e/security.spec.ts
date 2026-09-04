@@ -19,7 +19,7 @@ test.describe('security headers and behaviour', () => {
       if (/Content Security Policy/i.test(t)) violations.push(t);
     });
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     expect(violations, `CSP blocked resources:\n${violations.join('\n')}`).toEqual([]);
   });
 

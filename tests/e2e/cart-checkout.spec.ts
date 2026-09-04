@@ -12,7 +12,7 @@ test.describe('cart and checkout', () => {
   test('adding a product to the cart updates the cart', async ({ page }) => {
     await page.goto('/');
     await page.locator('a[href^="/product/"]').first().click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
 
     // A region-restricted product must block the add button until acknowledged.
     const ack = page.locator('input[type="checkbox"]').first();

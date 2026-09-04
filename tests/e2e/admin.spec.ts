@@ -9,10 +9,10 @@ import { SEED_ADMIN, expectNoAppError, expectPersianRtl } from './helpers';
 test.describe('admin panel', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/auth/login');
-    await page.locator('input').first().fill(SEED_ADMIN.email);
-    await page.locator('input[type="password"]').first().fill(SEED_ADMIN.password);
+    await page.locator('input[name="identifier"]').fill(SEED_ADMIN.email);
+    await page.locator('input[name="password"]').fill(SEED_ADMIN.password);
     await page.getByRole('button', { name: /ورود/ }).first().click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForURL((u) => !u.pathname.startsWith('/auth/login'), { timeout: 20_000 });
   });
 
   test('dashboard loads with real metrics', async ({ page }) => {
@@ -31,7 +31,7 @@ test.describe('admin panel', () => {
     expect(await rows.count()).toBeGreaterThan(5);
 
     await page.locator('table tbody tr a').first().click();
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('domcontentloaded');
     await expectNoAppError(page);
   });
 

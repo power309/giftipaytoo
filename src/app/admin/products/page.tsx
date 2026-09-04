@@ -6,14 +6,7 @@ import { PageHeader, Money, StatusPill, DemoBadge } from '@/components/admin/kit
 import { Button, Badge } from '@/components/ui';
 import { DataTable, type Column } from '@/components/admin/data-table';
 import { listProducts, type ProductListRow } from './query';
-import {
-  bulkSetStatus,
-  bulkSetFeatured,
-  bulkSetCategory,
-  bulkSetBrand,
-  bulkDuplicate,
-  bulkDelete,
-} from './actions';
+import { runProductBulkAction } from './actions';
 
 export const metadata = { title: 'محصولات' };
 export const dynamic = 'force-dynamic';
@@ -204,41 +197,29 @@ export default async function ProductsPage({
           { key: 'demo', label: 'نمونه', options: [{ value: '1', label: 'داده نمونه' }, { value: '0', label: 'واقعی' }] },
         ]}
         bulkActions={[
-          { key: 'activate', label: 'فعال‌سازی', run: (ids) => bulkSetStatus(ids, 'ACTIVE') },
-          { key: 'deactivate', label: 'غیرفعال‌سازی', run: (ids) => bulkSetStatus(ids, 'INACTIVE') },
-          { key: 'feature', label: 'ویژه کردن', run: (ids) => bulkSetFeatured(ids, true) },
-          { key: 'unfeature', label: 'خارج از ویژه', run: (ids) => bulkSetFeatured(ids, false) },
+          { key: 'activate', label: 'فعال‌سازی' },
+          { key: 'deactivate', label: 'غیرفعال‌سازی' },
+          { key: 'feature', label: 'ویژه کردن' },
+          { key: 'unfeature', label: 'خارج از ویژه' },
           {
             key: 'set-category',
             label: 'تغییر دسته…',
-            run: async (ids) => {
-              const target = window.prompt(
-                `شناسه دسته جدید را وارد کنید:\n${categories.map((c) => `${c.id} — ${c.nameFa}`).join('\n')}`,
-              );
-              if (!target) return { ok: false, error: 'لغو شد.' };
-              return bulkSetCategory(ids, target.trim());
-            },
+            prompt: `شناسه دسته جدید را وارد کنید:\n${categories.map((c) => `${c.id} — ${c.nameFa}`).join('\n')}`,
           },
           {
             key: 'set-brand',
             label: 'تغییر برند…',
-            run: async (ids) => {
-              const target = window.prompt(
-                `شناسه برند جدید را وارد کنید:\n${brands.map((b) => `${b.id} — ${b.nameFa}`).join('\n')}`,
-              );
-              if (!target) return { ok: false, error: 'لغو شد.' };
-              return bulkSetBrand(ids, target.trim());
-            },
+            prompt: `شناسه برند جدید را وارد کنید:\n${brands.map((b) => `${b.id} — ${b.nameFa}`).join('\n')}`,
           },
-          { key: 'duplicate', label: 'تکثیر', run: (ids) => bulkDuplicate(ids) },
+          { key: 'duplicate', label: 'تکثیر' },
           {
             key: 'archive',
             label: 'حذف (بایگانی)',
             tone: 'danger',
             confirm: 'محصولات انتخاب‌شده بایگانی می‌شوند. ادامه می‌دهید؟',
-            run: (ids) => bulkDelete(ids),
           },
         ]}
+        onBulkAction={runProductBulkAction}
       />
     </div>
   );

@@ -457,3 +457,39 @@ export async function bulkDuplicate(ids: string[]): Promise<BulkResult> {
 export async function bulkDelete(ids: string[]): Promise<BulkResult> {
   return bulkSetStatus(ids, 'ARCHIVED');
 }
+
+/**
+ * Single entry point for the product list's bulk actions.
+ *
+ * `DataTable` is a Client Component, so it cannot receive per-action callbacks
+ * from this Server Component — React refuses to serialise plain functions. It
+ * receives this one Server Action instead and dispatches on `key`.
+ */
+export async function runProductBulkAction(
+  key: string,
+  ids: string[],
+  value?: string,
+): Promise<BulkResult> {
+  switch (key) {
+    case 'activate':
+      return bulkSetStatus(ids, 'ACTIVE');
+    case 'deactivate':
+      return bulkSetStatus(ids, 'INACTIVE');
+    case 'feature':
+      return bulkSetFeatured(ids, true);
+    case 'unfeature':
+      return bulkSetFeatured(ids, false);
+    case 'set-category':
+      if (!value) return { ok: false, error: 'شناسه دسته وارد نشد.' };
+      return bulkSetCategory(ids, value);
+    case 'set-brand':
+      if (!value) return { ok: false, error: 'شناسه برند وارد نشد.' };
+      return bulkSetBrand(ids, value);
+    case 'duplicate':
+      return bulkDuplicate(ids);
+    case 'archive':
+      return bulkDelete(ids);
+    default:
+      return { ok: false, error: 'عملیات ناشناخته است.' };
+  }
+}

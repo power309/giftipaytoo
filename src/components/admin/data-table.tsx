@@ -18,13 +18,30 @@ export type Column<T> = {
   secondary?: boolean;
 };
 
-export type BulkAction<T> = {
+/**
+ * A bulk action descriptor. Everything here is plain data on purpose.
+ *
+ * `DataTable` is a Client Component, and a Server Component cannot hand it a
+ * plain callback — React throws "Functions cannot be passed directly to Client
+ * Components". Pages therefore describe their actions declaratively and supply
+ * ONE `onBulkAction` prop that is a real Server Action (which React *can*
+ * serialise), keyed by `key`.
+ *
+ * `prompt` asks the operator for a value first and passes it to the action.
+ */
+export type BulkAction = {
   key: string;
   label: string;
   tone?: 'default' | 'danger';
   confirm?: string;
-  run: (ids: string[], rows: T[]) => Promise<{ ok: boolean; error?: string; message?: string }>;
+  prompt?: string;
 };
+
+export type BulkActionHandler = (
+  key: string,
+  ids: string[],
+  value?: string,
+) => Promise<{ ok: boolean; error?: string; message?: string }>;
 
 /**
  * The admin list surface: URL-driven search, filters, sorting and pagination
@@ -41,6 +58,7 @@ export function DataTable<T extends { id: string }>({
   searchPlaceholder = 'جست‌وجو…',
   filters,
   bulkActions,
+  onBulkAction,
   emptyTitle = 'موردی یافت نشد',
   emptyDescription,
   emptyAction,
@@ -56,7 +74,8 @@ export function DataTable<T extends { id: string }>({
   loading?: boolean;
   searchPlaceholder?: string;
   filters?: { key: string; label: string; options: { value: string; label: string }[] }[];
-  bulkActions?: BulkAction<T>[];
+  bulkActions?: BulkAction[];
+  onBulkAction?: BulkActionHandler;
   emptyTitle?: string;
   emptyDescription?: string;
   emptyAction?: React.ReactNode;
@@ -95,14 +114,20 @@ export function DataTable<T extends { id: string }>({
 
   const allSelected = rows.length > 0 && selected.size === rows.length;
 
-  async function runBulk(action: BulkAction<T>) {
-    if (selected.size === 0) return;
+  async function runBulk(action: BulkAction) {
+    if (selected.size === 0 || !onBulkAction) return;
     if (action.confirm && !window.confirm(action.confirm)) return;
+    let value: string | undefined;
+    if (action.prompt) {
+      const answer = window.prompt(action.prompt);
+      if (!answer || !answer.trim()) return;
+      value = answer.trim();
+    }
     setBusy(true);
     setNotice(null);
     try {
       const ids = Array.from(selected);
-      const res = await action.run(ids, rows.filter((r) => selected.has(r.id)));
+      const res = await onBulkAction(action.key, ids, value);
       if (res.ok) {
         setNotice({ tone: 'ok', text: res.message ?? 'عملیات با موفقیت انجام شد.' });
         setSelected(new Set());
@@ -229,7 +254,7 @@ export function DataTable<T extends { id: string }>({
       )}
 
       {/* Bulk bar */}
-      {bulkActions && selected.size > 0 && (
+      {bulkActions && onBulkAction && selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary-soft p-2.5" role="status">
           <span className="text-xs font-medium text-primary tnum">
             {selected.size.toLocaleString('fa-IR')} مورد انتخاب شده
