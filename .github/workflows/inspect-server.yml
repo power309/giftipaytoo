@@ -1,0 +1,188 @@
+name: 00 · Inspect server (read-only)
+
+# Manual only. This workflow NEVER writes, installs, restarts or stops anything.
+# It exists so the deployment can be planned against the server's real state
+# without touching the co-hosted movie project.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: giftipay-inspect
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: [self-hosted]
+    timeout-minutes: 12
+    steps:
+      - name: Runner identity
+        run: |
+          echo "::group::runner"
+          echo "RUNNER_NAME   = ${RUNNER_NAME:-?}"
+          echo "RUNNER_OS     = ${RUNNER_OS:-?}"
+          echo "RUNNER_ARCH   = ${RUNNER_ARCH:-?}"
+          echo "workdir       = ${RUNNER_WORKSPACE:-?}"
+          echo "hostname      = $(hostname 2>/dev/null)"
+          echo "whoami        = $(whoami 2>/dev/null)"
+          echo "uid/gid       = $(id 2>/dev/null)"
+          echo "pwd           = $(pwd)"
+          echo "::endgroup::"
+
+      - name: Runner labels and all runner services
+        run: |
+          echo "::group::runner services"
+          systemctl list-units --type=service --all 2>/dev/null | grep -i "actions.runner" || echo "(no actions.runner services visible)"
+          echo "--- runner install dirs ---"
+          ls -d /home/*/actions-runner* /opt/actions-runner* /srv/actions-runner* 2>/dev/null || echo "(none found in common paths)"
+          echo "--- .runner config (labels; no tokens) ---"
+          for f in /home/*/actions-runner*/.runner /opt/actions-runner*/.runner /srv/actions-runner*/.runner; do
+            [ -f "$f" ] && { echo "== $f"; sed -e 's/"[a-zA-Z]*[Tt]oken":"[^"]*"/"token":"<redacted>"/g' "$f" 2>/dev/null | head -30; }
+          done || true
+          echo "::endgroup::"
+
+      - name: OS, resources, uptime
+        run: |
+          echo "::group::system"
+          cat /etc/os-release 2>/dev/null | head -4
+          uname -a
+          uptime
+          echo "--- memory ---"; free -h 2>/dev/null
+          echo "--- disk ---";  df -hT 2>/dev/null | grep -vE "tmpfs|overlay" | head -15
+          echo "--- cpu ---"; nproc
+          echo "::endgroup::"
+
+      - name: Privilege check (non-interactive only)
+        run: |
+          echo "::group::sudo"
+          if sudo -n true 2>/dev/null; then
+            echo "passwordless sudo: YES"
+            sudo -n -l 2>/dev/null | head -20
+          else
+            echo "passwordless sudo: NO (deployment must run as $(whoami) or be granted sudo)"
+          fi
+          echo "::endgroup::"
+
+      - name: Running services
+        run: |
+          echo "::group::services"
+          systemctl list-units --type=service --state=running 2>/dev/null | head -60 || echo "(systemctl unavailable)"
+          echo "::endgroup::"
+
+      - name: Listening ports (who owns what)
+        run: |
+          echo "::group::ports"
+          (sudo -n ss -tlnp 2>/dev/null || ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | head -60
+          echo "::endgroup::"
+
+      - name: Web server configuration
+        run: |
+          echo "::group::nginx"
+          nginx -v 2>&1 || echo "(nginx not installed)"
+          echo "--- sites-enabled ---"
+          ls -la /etc/nginx/sites-enabled/ 2>/dev/null || echo "(no sites-enabled)"
+          echo "--- conf.d ---"
+          ls -la /etc/nginx/conf.d/ 2>/dev/null || echo "(no conf.d)"
+          echo "--- server_name / listen directives currently configured ---"
+          grep -RhoE "^[[:space:]]*(server_name|listen)[[:space:]]+[^;]+;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u | head -40 || true
+          echo "--- upstream/proxy_pass targets (shows movie app's internal ports) ---"
+          grep -RhoE "proxy_pass[[:space:]]+[^;]+;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sort -u | head -20 || true
+          echo "::endgroup::"
+          echo "::group::apache"
+          apache2 -v 2>&1 | head -2 || httpd -v 2>&1 | head -2 || echo "(apache not installed)"
+          ls -la /etc/apache2/sites-enabled/ 2>/dev/null || echo "(no apache sites-enabled)"
+          echo "::endgroup::"
+
+      - name: Docker
+        run: |
+          echo "::group::docker"
+          docker --version 2>/dev/null || echo "(docker not installed)"
+          (sudo -n docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null) | head -30 || echo "(cannot list containers)"
+          echo "--- networks ---"
+          (sudo -n docker network ls 2>/dev/null || docker network ls 2>/dev/null) | head -15 || true
+          echo "--- compose projects on disk ---"
+          ls -d /opt/*/docker-compose.y*ml /srv/*/docker-compose.y*ml /var/www/*/docker-compose.y*ml /home/*/*/docker-compose.y*ml 2>/dev/null || echo "(none found)"
+          echo "::endgroup::"
+
+      - name: Databases present (names only, never contents)
+        run: |
+          echo "::group::postgres"
+          (psql --version 2>/dev/null) || echo "(psql client not installed)"
+          systemctl is-active postgresql 2>/dev/null || echo "postgresql service: not active/absent"
+          (sudo -n -u postgres psql -tAc "select datname from pg_database where datistemplate=false;" 2>/dev/null && echo "(listed as postgres superuser)") || echo "(cannot enumerate databases without sudo -u postgres)"
+          (sudo -n -u postgres psql -tAc "select rolname from pg_roles where rolcanlogin;" 2>/dev/null) || true
+          echo "--- postgres listening config ---"
+          (sudo -n grep -hE "^[[:space:]]*(port|listen_addresses)" /etc/postgresql/*/main/postgresql.conf 2>/dev/null) || true
+          echo "::endgroup::"
+          echo "::group::mysql/mariadb"
+          (mysql --version 2>/dev/null) || echo "(mysql client not installed)"
+          systemctl is-active mysql mariadb 2>/dev/null || echo "mysql/mariadb: not active/absent"
+          echo "::endgroup::"
+          echo "::group::redis"
+          (redis-server --version 2>/dev/null) || echo "(redis not installed)"
+          systemctl is-active redis redis-server 2>/dev/null || true
+          echo "::endgroup::"
+
+      - name: Existing project directories (paths + ownership only)
+        run: |
+          echo "::group::projects"
+          for d in /var/www /srv /opt /home; do
+            echo "== $d"
+            ls -la "$d" 2>/dev/null | head -25
+          done
+          echo "--- any .env files (PATHS AND PERMISSIONS ONLY — contents never printed) ---"
+          find /var/www /srv /opt /home -maxdepth 4 -name ".env*" -type f 2>/dev/null | head -20 | while read -r f; do
+            echo "$(stat -c '%A %U:%G %s bytes' "$f" 2>/dev/null)  $f"
+          done || true
+          echo "::endgroup::"
+
+      - name: Node / PM2 / process managers
+        run: |
+          echo "::group::node"
+          node --version 2>/dev/null || echo "(node not installed)"
+          npm --version 2>/dev/null || true
+          pm2 --version 2>/dev/null && (pm2 list 2>/dev/null | head -20) || echo "(pm2 not installed)"
+          echo "--- app-like systemd units ---"
+          systemctl list-units --type=service --all 2>/dev/null | grep -iE "node|next|movie|film|cinema|app|web|gift|laravel|php|gunicorn|uwsgi" | head -25 || echo "(none matched)"
+          echo "::endgroup::"
+
+      - name: TLS certificates
+        run: |
+          echo "::group::certs"
+          certbot --version 2>/dev/null || echo "(certbot not installed)"
+          (sudo -n certbot certificates 2>/dev/null | grep -E "Certificate Name|Domains|Expiry|VALID|INVALID") || echo "(cannot run certbot certificates without sudo)"
+          echo "--- letsencrypt live dirs ---"
+          (sudo -n ls -1 /etc/letsencrypt/live 2>/dev/null || ls -1 /etc/letsencrypt/live 2>/dev/null) || echo "(no /etc/letsencrypt/live readable)"
+          echo "--- renewal timer ---"
+          systemctl list-timers 2>/dev/null | grep -iE "certbot|renew" || echo "(no certbot timer visible)"
+          echo "::endgroup::"
+
+      - name: Firewall and scheduled jobs
+        run: |
+          echo "::group::firewall"
+          (sudo -n ufw status verbose 2>/dev/null) || (ufw status 2>/dev/null) || echo "(ufw unavailable/needs sudo)"
+          (sudo -n iptables -S 2>/dev/null | head -20) || true
+          echo "::endgroup::"
+          echo "::group::cron and timers"
+          (sudo -n ls -la /etc/cron.d/ 2>/dev/null) || ls -la /etc/cron.d/ 2>/dev/null || true
+          crontab -l 2>/dev/null || echo "(no crontab for $(whoami))"
+          systemctl list-timers --all 2>/dev/null | head -20 || true
+          echo "::endgroup::"
+
+      - name: What answers on the public interfaces right now
+        run: |
+          echo "::group::http probe (localhost only)"
+          for p in 80 443; do
+            echo "--- localhost:$p ---"
+            curl -sk -o /dev/null -w "  status=%{http_code} time=%{time_total}s\n" -m 8 "http://127.0.0.1:$p/" 2>/dev/null || echo "  (no answer)"
+          done
+          echo "--- movie site vhost response (by Host header, if configured) ---"
+          grep -RhoE "server_name[[:space:]]+[^;]+;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sed 's/server_name//;s/;//' | tr ' ' '\n' | grep -vE "^$|_|default" | sort -u | head -6 | while read -r h; do
+            code=$(curl -sk -o /dev/null -w "%{http_code}" -m 8 -H "Host: $h" "http://127.0.0.1/" 2>/dev/null)
+            echo "  Host: $h -> $code"
+          done || true
+          echo "::endgroup::"
+
+      - name: Summary
+        run: |
+          echo "Inspection complete on runner '${RUNNER_NAME:-?}' / host $(hostname)."
+          echo "No files were written, no services were started, stopped or restarted."
