@@ -44,6 +44,7 @@ export type SettingGroup =
   | 'notifications'
   | 'seo'
   | 'analytics'
+  | 'security'
   | 'system';
 
 export interface SettingDef {
@@ -69,6 +70,7 @@ export const SETTING_GROUP_LABELS: Record<SettingGroup, string> = {
   notifications: 'اطلاع‌رسانی',
   seo: 'سئو',
   analytics: 'آمار و تحلیل',
+  security: 'امنیت',
   system: 'سیستم',
 };
 
