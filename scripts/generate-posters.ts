@@ -554,6 +554,37 @@ async function generateBanners(prisma: PrismaClient, cli: Cli, summary: Summary)
       { avif: true },
     );
   });
+
+  // Campaigns carry their own promotional banners and reference the same
+  // /media/banners/ paths, so they must be generated here too — otherwise the
+  // home page renders a broken image for every active campaign.
+  const campaigns = await prisma.campaign.findMany({
+    select: { slug: true, nameFa: true, descriptionFa: true, bannerDesktop: true, bannerMobile: true },
+  });
+  await runPool(campaigns, cli.concurrency, async (c) => {
+    const desktopPath = c.bannerDesktop || `/media/banners/${c.slug}-desktop.webp`;
+    const mobilePath = c.bannerMobile || `/media/banners/${c.slug}-mobile.webp`;
+    for (const [label, path, variant] of [
+      ['desktop', desktopPath, 'desktop'],
+      ['mobile', mobilePath, 'mobile'],
+    ] as const) {
+      await runTask(
+        `campaign:${c.slug}-${label}`,
+        path,
+        () =>
+          renderBannerSvg({
+            titleFa: c.nameFa,
+            subtitleFa: c.descriptionFa ?? undefined,
+            ctaLabel: 'مشاهده کمپین',
+            accentColor: '#e0a416',
+            variant,
+          }),
+        cli,
+        summary,
+        { avif: true },
+      );
+    }
+  });
 }
 
 async function generateOg(prisma: PrismaClient, cli: Cli, summary: Summary): Promise<void> {

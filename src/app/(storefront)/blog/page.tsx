@@ -66,13 +66,12 @@ export default async function BlogIndexPage({ searchParams }: Props) {
           <Pagination
             page={page}
             totalPages={totalPages}
-            buildHref={(p) => {
+            hrefTemplate={(() => {
               const usp = new URLSearchParams();
               if (sp.category) usp.set('category', sp.category);
-              if (p > 1) usp.set('page', String(p));
-              const qs = usp.toString();
-              return `/blog${qs ? `?${qs}` : ''}`;
-            }}
+              usp.set('page', 'PAGE_TOKEN');
+              return `/blog?${usp.toString()}`.replace('PAGE_TOKEN', '{page}');
+            })()}
           />
           <p className="sr-only">{total} مطلب</p>
         </>

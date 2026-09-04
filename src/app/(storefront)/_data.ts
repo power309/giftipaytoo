@@ -33,6 +33,29 @@ export type { SortKey, ProductFilters, FacetOption, ProductListFacets };
  * thin re-export, so the real implementation is actually picked up.
  */
 
+/**
+ * NOTE ON `@/server/catalog/queries`
+ * ---------------------------------
+ * That module implements the same catalog reads with SQL-level filtering and
+ * faceting, and this file used to delegate to it. It returns a *different* row
+ * shape than the storefront renders — `poster` / `priceFromToman` / `brand{}` /
+ * `iconKey` / `logoKey` versus `posterPath` / `priceToman` / `brandNameFa` /
+ * `iconPath` / `logoPath` — and carries no stock information at all, so
+ * delegating produced product cards with no image, no price and no brand.
+ *
+ * Rather than ship a lossy adapter, the storefront uses the implementations in
+ * this file, which are typed to exactly what the pages render. The catalog
+ * module still backs `/api/search` and the search ranking. Adopting it here is
+ * a worthwhile follow-up, but it needs an explicit mapping layer plus a stock
+ * join — not a silent hand-off.
+ *
+ * Scale note: price/discount sorting and the price-range and denomination
+ * filters are resolved in JavaScript over an indexed, capped fetch. That is
+ * correct and fast at the current catalog size (~110 products / ~350
+ * variants); a much larger catalog should push that work into SQL through the
+ * mapping layer described above.
+ */
+
 const CATALOG_SPECIFIER = '@/server/catalog/queries';
 
 /**
@@ -332,16 +355,6 @@ function buildFacets(rows: RawProduct[]): ProductListFacets {
 }
 
 export async function listProducts(filters: ProductFilters): Promise<ListProductsResult> {
-  const mod = await loadModule<{ listProducts?: (f: ProductFilters) => Promise<ListProductsResult> }>(
-    CATALOG_SPECIFIER,
-  );
-  if (mod?.listProducts) {
-    try {
-      return await mod.listProducts(filters);
-    } catch {
-      /* fall through to the direct implementation */
-    }
-  }
   return listProductsFallback(filters);
 }
 
@@ -552,16 +565,6 @@ async function getProductBySlugFallback(slug: string): Promise<ProductDetail | n
 }
 
 export async function getProductBySlug(slug: string): Promise<ProductDetail | null> {
-  const mod = await loadModule<{ getProductBySlug?: (s: string) => Promise<ProductDetail | null> }>(
-    CATALOG_SPECIFIER,
-  );
-  if (mod?.getProductBySlug) {
-    try {
-      return await mod.getProductBySlug(slug);
-    } catch {
-      /* fall through */
-    }
-  }
   return getProductBySlugFallback(slug);
 }
 
@@ -909,14 +912,6 @@ export type CategoryTreeNode = {
 };
 
 export async function getCategoryTree(): Promise<CategoryTreeNode[]> {
-  const mod = await loadModule<{ getCategoryTree?: () => Promise<CategoryTreeNode[]> }>(CATALOG_SPECIFIER);
-  if (mod?.getCategoryTree) {
-    try {
-      return await mod.getCategoryTree();
-    } catch {
-      /* fall through */
-    }
-  }
   const roots = await db.category.findMany({
     where: { parentId: null, isActive: true },
     orderBy: { sortOrder: 'asc' },
@@ -965,16 +960,6 @@ export type CategoryDetail = {
 };
 
 export async function getCategoryBySlug(slug: string): Promise<CategoryDetail | null> {
-  const mod = await loadModule<{ getCategoryBySlug?: (s: string) => Promise<CategoryDetail | null> }>(
-    CATALOG_SPECIFIER,
-  );
-  if (mod?.getCategoryBySlug) {
-    try {
-      return await mod.getCategoryBySlug(slug);
-    } catch {
-      /* fall through */
-    }
-  }
   const c = await db.category.findFirst({
     where: { slug, isActive: true },
     select: {
@@ -1017,14 +1002,6 @@ export type BrandDetail = {
 };
 
 export async function getBrandBySlug(slug: string): Promise<BrandDetail | null> {
-  const mod = await loadModule<{ getBrandBySlug?: (s: string) => Promise<BrandDetail | null> }>(CATALOG_SPECIFIER);
-  if (mod?.getBrandBySlug) {
-    try {
-      return await mod.getBrandBySlug(slug);
-    } catch {
-      /* fall through */
-    }
-  }
   const b = await db.brand.findFirst({
     where: { slug, isActive: true },
     select: {
@@ -1054,14 +1031,6 @@ export async function getBrandBySlug(slug: string): Promise<BrandDetail | null> 
 export type BrandListItem = { slug: string; nameFa: string; nameEn: string; logoPath: string | null; productCount: number };
 
 export async function listBrands(): Promise<BrandListItem[]> {
-  const mod = await loadModule<{ listBrands?: () => Promise<BrandListItem[]> }>(CATALOG_SPECIFIER);
-  if (mod?.listBrands) {
-    try {
-      return await mod.listBrands();
-    } catch {
-      /* fall through */
-    }
-  }
   const rows = await db.brand.findMany({
     where: { isActive: true },
     orderBy: { nameFa: 'asc' },

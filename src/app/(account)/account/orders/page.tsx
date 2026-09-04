@@ -127,15 +127,19 @@ export default async function OrdersPage({
         </Card>
       )}
 
-      <Pagination page={page} totalPages={totalPages} buildHref={(p) => {
-        const params = new URLSearchParams();
-        if (status) params.set('status', status);
-        if (q) params.set('q', q);
-        if (sp.from) params.set('from', sp.from);
-        if (sp.to) params.set('to', sp.to);
-        params.set('page', String(p));
-        return `/account/orders?${params.toString()}`;
-      }} />
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        hrefTemplate={(() => {
+          const params = new URLSearchParams();
+          if (status) params.set('status', status);
+          if (q) params.set('q', q);
+          if (sp.from) params.set('from', sp.from);
+          if (sp.to) params.set('to', sp.to);
+          params.set('page', 'PAGE_TOKEN');
+          return `/account/orders?${params.toString()}`.replace('PAGE_TOKEN', '{page}');
+        })()}
+      />
     </div>
   );
 }

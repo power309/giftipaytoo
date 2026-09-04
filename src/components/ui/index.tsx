@@ -536,14 +536,28 @@ export function Pagination({
   page,
   totalPages,
   onPage,
-  buildHref,
+  hrefTemplate,
 }: {
   page: number;
   totalPages: number;
+  /** Client-side handler. Ignored when `hrefTemplate` is given. */
   onPage?: (p: number) => void;
-  buildHref?: (p: number) => string;
+  /**
+   * URL template with a literal `{page}` placeholder, e.g.
+   * `/category/steam?sort=newest&page={page}`.
+   *
+   * This is a *string*, not a builder function, on purpose: this is a Client
+   * Component, and a Server Component cannot pass a function across that
+   * boundary — doing so throws "Functions cannot be passed directly to Client
+   * Components" at render time.
+   */
+  hrefTemplate?: string;
 }) {
-  if (totalPages <= 1) return null;
+  if (!Number.isFinite(totalPages) || totalPages <= 1) return null;
+
+  const buildHref = hrefTemplate
+    ? (p: number) => hrefTemplate.replace(/\{page\}/g, String(p))
+    : undefined;
 
   const pages: (number | '…')[] = [];
   const push = (p: number) => pages.push(p);

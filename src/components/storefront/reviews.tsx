@@ -89,7 +89,7 @@ export function ReviewList({
         ))}
       </ul>
       {totalPages > 1 && (
-        <Pagination page={page} totalPages={totalPages} buildHref={(p) => `${basePath}?reviewPage=${p}#reviews`} />
+        <Pagination page={page} totalPages={totalPages} hrefTemplate={`${basePath}?reviewPage={page}#reviews`} />
       )}
     </div>
   );

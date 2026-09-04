@@ -50,16 +50,16 @@ export function ProductGridPagination({
   basePath: string;
   searchParams: Record<string, string | undefined>;
 }) {
-  const buildHref = (p: number) => {
-    const usp = new URLSearchParams();
-    for (const [k, v] of Object.entries(searchParams)) {
-      if (v && k !== 'page') usp.set(k, v);
-    }
-    if (p > 1) usp.set('page', String(p));
-    const qs = usp.toString();
-    return `${basePath}${qs ? `?${qs}` : ''}`;
-  };
-  return <Pagination page={page} totalPages={totalPages} buildHref={buildHref} />;
+  // A template string, not a function — Pagination is a Client Component and a
+  // Server Component cannot hand a function across that boundary.
+  const usp = new URLSearchParams();
+  for (const [k, v] of Object.entries(searchParams)) {
+    if (v && k !== 'page') usp.set(k, v);
+  }
+  usp.set('page', '__PAGE__');
+  const hrefTemplate = `${basePath}?${usp.toString()}`.replace('__PAGE__', '{page}');
+
+  return <Pagination page={page} totalPages={totalPages} hrefTemplate={hrefTemplate} />;
 }
 
 export function RailSkeleton() {
