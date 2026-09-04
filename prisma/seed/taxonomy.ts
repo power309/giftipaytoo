@@ -144,6 +144,7 @@ export async function seedTaxonomy() {
         seoTitle: `خرید ${parent.nameFa} | گیفتی‌پی`,
         seoDescription: parent.descriptionFa,
         posterKey: `/media/categories/${parent.slug}.webp`,
+        iconKey: `/media/categories/${parent.slug}.webp`,
       },
     });
     categoryIdBySlug.set(parent.slug, p.id);
@@ -169,6 +170,7 @@ export async function seedTaxonomy() {
           seoTitle: `خرید گیفت‌کارت ${child.nameFa} | گیفتی‌پی`,
           seoDescription: child.descriptionFa,
           posterKey: `/media/categories/${child.slug}.webp`,
+          iconKey: `/media/categories/${child.slug}.webp`,
         },
       });
       categoryIdBySlug.set(child.slug, c.id);
