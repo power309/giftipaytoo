@@ -8,7 +8,7 @@ test.describe('storefront', () => {
     await expectNoAppError(page);
 
     // The seeded catalog must actually surface products, not an empty shell.
-    const productLinks = page.locator('a[href^="/product/"]');
+    const productLinks = page.locator('#main a[href^="/product/"]');
     await expect(productLinks.first()).toBeVisible();
     expect(await productLinks.count()).toBeGreaterThan(4);
 
@@ -20,7 +20,9 @@ test.describe('storefront', () => {
   test('category listing filters and paginates', async ({ page }) => {
     await page.goto('/categories');
     await expectNoAppError(page);
-    const firstCategory = page.locator('a[href^="/category/"]').first();
+    // Scope to #main: the header's desktop mega menu also contains category
+    // links and stays in the DOM (hidden) at mobile widths.
+    const firstCategory = page.locator('#main a[href^="/category/"]').first();
     await expect(firstCategory).toBeVisible();
     await firstCategory.click();
     await page.waitForLoadState('domcontentloaded');
