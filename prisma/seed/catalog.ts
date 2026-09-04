@@ -398,6 +398,26 @@ export async function seedCatalog(ctx: {
 
   const brandNameFaBySlug = new Map(BRANDS.map((b) => [b.slug, b.nameFa]));
 
+  // Several product "lines" share the same brand + region (e.g. PS Plus
+  // Essential/Extra/Deluxe US, or Xbox Game Pass Ultimate/Core US) and would
+  // otherwise collide on GP-<BRAND>-<REGION>-<DENOM>. When more than one
+  // product shares a brand+region pair, disambiguate the SKU with a short
+  // plan tag derived from the product slug; single-product pairs keep the
+  // plain pattern from the spec.
+  const brandRegionGroups = new Map<string, number>();
+  for (const p of PRODUCTS) {
+    const k = `${p.brandSlug}|${p.regionCode}`;
+    brandRegionGroups.set(k, (brandRegionGroups.get(k) ?? 0) + 1);
+  }
+  function planTag(def: ProductDef): string {
+    let s = def.slug;
+    const regionSuffix = `-${def.regionCode.toLowerCase()}`;
+    if (s.endsWith(regionSuffix)) s = s.slice(0, -regionSuffix.length);
+    const brandTokens = new Set(def.brandSlug.split('-'));
+    const parts = s.split('-').filter((p) => !brandTokens.has(p) && p !== 'global');
+    return (parts.join('').slice(0, 12).toUpperCase() || 'X') + '-';
+  }
+
   let productIndex = 0;
   const createdProductIds = new Map<string, string>(); // slug -> id
 
@@ -502,8 +522,11 @@ export async function seedCatalog(ctx: {
       isActive: boolean; isDefault: boolean; sortOrder: number;
     }[] = [];
 
+    const needsPlanTag = (brandRegionGroups.get(`${def.brandSlug}|${def.regionCode}`) ?? 1) > 1;
+    const tag = needsPlanTag ? planTag(def) : '';
+
     def.denominations.forEach((d, di) => {
-      const sku = buildSku(def.brandSlug, def.regionCode, d.key);
+      const sku = buildSku(def.brandSlug, def.regionCode, `${tag}${d.key}`);
       let costToman: number;
       let denominationMinor: number | null = null;
       let currencyCode: string | null = null;

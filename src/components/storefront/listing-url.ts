@@ -1,4 +1,4 @@
-import type { ProductFilters, SortKey } from '@/app/(storefront)/_data';
+import type { ProductFilters, SortKey } from '@/app/(storefront)/_data-shared';
 
 /**
  * Shared URL <-> filter-state mapping for category/brand/search listings.

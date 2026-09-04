@@ -1,5 +1,9 @@
 import 'server-only';
 import { db } from '@/server/db';
+import { type FaqItem, FAQ_GROUP_LABELS } from './_content-shared';
+
+export type { FaqItem };
+export { FAQ_GROUP_LABELS };
 
 /**
  * Content data access (blog, FAQ, CMS pages). These models (`BlogPost`,
@@ -135,8 +139,6 @@ export async function getRelatedBlogPosts(slug: string, categoryFa: string | nul
 
 // ── FAQ ───────────────────────────────────────────────────────────────────
 
-export type FaqItem = { id: string; questionFa: string; answerFa: string; group: string };
-
 export async function listFaqs(): Promise<{ group: string; items: FaqItem[] }[]> {
   const rows = await db.faq.findMany({
     where: { isActive: true, productId: null },
@@ -150,15 +152,6 @@ export async function listFaqs(): Promise<{ group: string; items: FaqItem[] }[]>
   }
   return Array.from(byGroup.entries()).map(([group, items]) => ({ group, items }));
 }
-
-export const FAQ_GROUP_LABELS: Record<string, string> = {
-  general: 'عمومی',
-  order: 'سفارش و پرداخت',
-  delivery: 'تحویل و کد',
-  account: 'حساب کاربری',
-  refund: 'بازگشت وجه',
-  support: 'پشتیبانی',
-};
 
 // ── CMS pages ─────────────────────────────────────────────────────────────
 

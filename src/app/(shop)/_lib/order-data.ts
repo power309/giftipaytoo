@@ -25,6 +25,7 @@ type RawOrderItem = {
 };
 type RawPayment = { status?: string; failureReason?: string | null; gateway?: string };
 type RawOrder = {
+  id?: string;
   orderNumber?: string;
   status?: string;
   paymentStatus?: string;
@@ -63,6 +64,7 @@ function normalizeOrder(raw: RawOrder, fallbackOrderNumber: string): OrderResult
   })();
 
   return {
+    id: raw.id ?? '',
     orderNumber: raw.orderNumber ?? fallbackOrderNumber,
     status: raw.status ?? 'PENDING',
     paymentStatus: raw.paymentStatus ?? 'PENDING',

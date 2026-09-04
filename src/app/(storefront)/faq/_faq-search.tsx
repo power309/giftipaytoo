@@ -5,7 +5,7 @@ import { Search, HelpCircle } from 'lucide-react';
 import { EmptyState } from '@/components/ui';
 import { normalizeFa } from '@/lib/persian';
 import { FaqAccordion } from '@/components/storefront/faq-accordion';
-import { FAQ_GROUP_LABELS, type FaqItem } from '../_content';
+import { FAQ_GROUP_LABELS, type FaqItem } from '../_content-shared';
 
 export function FaqSearch({ groups }: { groups: { group: string; items: FaqItem[] }[] }) {
   const [q, setQ] = React.useState('');

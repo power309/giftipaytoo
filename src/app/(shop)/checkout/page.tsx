@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { Suspense } from 'react';
+import { Skeleton } from '@/components/ui';
 import { getSessionUser, readCartKey } from '@/server/auth/session';
 import { fetchCartOrEmpty } from '../_lib/cart-data';
 import { fetchGateways } from '../_lib/gateways';
@@ -22,22 +24,24 @@ export default async function CheckoutPage() {
 
   return (
     <div className="container-page py-6 sm:py-8">
-      <CheckoutClient
-        initialCart={cart}
-        cartUnavailable={cartUnavailable}
-        cartErrorFa={cartErrorFa}
-        gateways={gateways}
-        gatewaysUnavailable={gatewaysUnavailable}
-        guestCheckoutEnabled={guestCheckoutEnabled}
-        isSignedIn={!!user}
-        userContact={{
-          email: user?.email ?? null,
-          mobile: user?.phone ?? null,
-          emailVerified: !!user?.emailVerified,
-          mobileVerified: !!user?.phoneVerified,
-        }}
-        submitOrder={submitOrder}
-      />
+      <Suspense fallback={<Skeleton className="h-96 w-full rounded-2xl" />}>
+        <CheckoutClient
+          initialCart={cart}
+          cartUnavailable={cartUnavailable}
+          cartErrorFa={cartErrorFa}
+          gateways={gateways}
+          gatewaysUnavailable={gatewaysUnavailable}
+          guestCheckoutEnabled={guestCheckoutEnabled}
+          isSignedIn={!!user}
+          userContact={{
+            email: user?.email ?? null,
+            mobile: user?.phone ?? null,
+            emailVerified: !!user?.emailVerified,
+            mobileVerified: !!user?.phoneVerified,
+          }}
+          submitOrder={submitOrder}
+        />
+      </Suspense>
     </div>
   );
 }

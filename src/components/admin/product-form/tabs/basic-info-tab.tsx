@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Check, X, Loader2, Pencil } from 'lucide-react';
-import { Field, Input, Select, Switch } from '@/components/ui';
+import { Field, Input, Select } from '@/components/ui';
 import { slugify } from '@/lib/persian';
 import type { ProductFormValue, ProductFormRefData } from '../types';
 import { checkSlugAvailable, checkSkuAvailable } from '@/app/admin/products/actions';
@@ -215,8 +215,6 @@ export function BasicInfoTab({
       <Field label="تاریخ انقضا" htmlFor="pf-expires-at" hint="اختیاری — پس از این تاریخ محصول غیرفعال می‌شود.">
         <Input id="pf-expires-at" type="datetime-local" value={value.expiresAt ?? ''} onChange={(e) => onChange({ expiresAt: e.target.value || null })} />
       </Field>
-
-      <Switch checked={value.refundEligible} onChange={(v) => onChange({ refundEligible: v })} label="این محصول قابل استرداد است" id="pf-refund-eligible" />
     </div>
   );
 }

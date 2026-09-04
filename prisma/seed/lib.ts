@@ -99,12 +99,12 @@ export function chunk<T>(arr: readonly T[], size: number): T[][] {
   return out;
 }
 
-export function toIdMap<T extends Record<string, unknown>>(
+export function toIdMap<T extends { id: string }>(
   rows: T[],
   key: keyof T,
 ): Map<string, string> {
   const map = new Map<string, string>();
-  for (const r of rows) map.set(String(r[key]), String((r as { id: string }).id));
+  for (const r of rows) map.set(String(r[key]), r.id);
   return map;
 }
 

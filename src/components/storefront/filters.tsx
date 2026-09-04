@@ -7,7 +7,7 @@ import { Button, Checkbox, Badge } from '@/components/ui';
 import { formatTomanDigits } from '@/lib/money';
 import { toPersianDigits, parsePersianNumber } from '@/lib/persian';
 import { cn } from '@/lib/utils';
-import { deliveryLabel, SORT_LABELS, type ProductListFacets, type SortKey } from '@/app/(storefront)/_data';
+import { deliveryLabel, SORT_LABELS, type ProductListFacets, type SortKey } from '@/app/(storefront)/_data-shared';
 import {
   buildQuery,
   parseListingParams,

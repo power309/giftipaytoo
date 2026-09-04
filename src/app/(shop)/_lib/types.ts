@@ -174,6 +174,7 @@ export type OrderResultItemDTO = {
 };
 
 export type OrderResultDTO = {
+  id: string;
   orderNumber: string;
   status: string;
   paymentStatus: string;

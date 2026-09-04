@@ -1,11 +1,13 @@
 'use server';
 
+import { z } from 'zod';
 import { checkoutInputSchema, otpSchema, firstZodMessage } from '@/lib/schemas';
 import { env } from '@/lib/env';
 import { getSessionUser, readCartKey, clientIp, clientUserAgent } from '@/server/auth/session';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
 import { SEAM, callSeam } from '../_lib/seams';
-import { grantGuestOrderAccess } from '../_lib/order-access';
+import { grantGuestOrderAccess, resolveOrderAccess } from '../_lib/order-access';
+import { fetchOrderResult } from '../_lib/order-data';
 import type { SubmitOrderInput, SubmitOrderResult } from '../_lib/types';
 
 /**
@@ -172,4 +174,72 @@ function interpretOrderError(code: string | undefined, messageFa: string): Submi
     default:
       return fail('UNKNOWN', messageFa);
   }
+}
+
+// ── Retry payment on a failed/canceled/expired order ────────────────────
+
+const retrySchema = z.object({
+  orderNumber: z.string().min(1),
+  gatewayKey: z.enum(['zarinpal', 'wallet', 'manual']),
+});
+
+export type RetryPaymentResult =
+  | { ok: true; redirectUrl: string }
+  | { ok: false; messageFa: string };
+
+/**
+ * Starts a fresh payment attempt for an order that already exists (failed,
+ * canceled or expired). Never trusts a client-supplied order id — it
+ * re-resolves ownership exactly like the result page (`resolveOrderAccess`)
+ * and re-reads the order server-side before calling `startPayment`, so this
+ * can't be pointed at someone else's order.
+ */
+export async function retryPayment(input: { orderNumber: string; gatewayKey: string }): Promise<RetryPaymentResult> {
+  const parsed = retrySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, messageFa: firstZodMessage(parsed.error) };
+
+  const access = await resolveOrderAccess(parsed.data.orderNumber);
+  if (!access.ok) return { ok: false, messageFa: 'برای این عملیات دسترسی ندارید.' };
+
+  const order = await fetchOrderResult(parsed.data.orderNumber);
+  if (order.kind !== 'ok') {
+    return { ok: false, messageFa: 'سفارش پیدا نشد یا در حال حاضر در دسترس نیست.' };
+  }
+  if (order.order.paymentStatus === 'PAID') {
+    return { ok: false, messageFa: 'این سفارش قبلاً پرداخت شده است.' };
+  }
+  if (!order.order.id) {
+    return { ok: false, messageFa: 'اطلاعات سفارش ناقص است. با پشتیبانی تماس بگیرید.' };
+  }
+
+  const user = await getSessionUser();
+  const ip = await clientIp();
+  try {
+    await enforceRateLimit('payment.start', user?.id ?? ip);
+  } catch (err) {
+    if (err instanceof RateLimitError) return { ok: false, messageFa: err.message };
+    throw err;
+  }
+
+  const paymentOutcome = await callSeam(
+    SEAM.paymentsService,
+    async (mod) => {
+      const startPayment = mod.startPayment as ((input: unknown) => Promise<Record<string, unknown>>) | undefined;
+      if (typeof startPayment !== 'function') throw new Error('ماژول درگاه پرداخت کامل نیست.');
+      return startPayment({
+        orderId: order.order.id,
+        orderNumber: order.order.orderNumber,
+        gatewayKey: parsed.data.gatewayKey,
+        callbackUrl: `${env.appUrl}/checkout/result/${order.order.orderNumber}`,
+      });
+    },
+    { unavailableMessageFa: 'اتصال به درگاه پرداخت هنوز فعال نشده است.' },
+  );
+
+  if (!paymentOutcome.ok) return { ok: false, messageFa: paymentOutcome.messageFa };
+  const redirectUrl = paymentOutcome.data.redirectUrl;
+  if (typeof redirectUrl !== 'string' || !redirectUrl) {
+    return { ok: false, messageFa: 'آدرس بازگشت درگاه پرداخت دریافت نشد.' };
+  }
+  return { ok: true, redirectUrl };
 }
