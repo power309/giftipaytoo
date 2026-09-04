@@ -15,16 +15,18 @@ export function AreaLineChart({
   unit,
   color = CHART_COLORS.primary,
   height = 220,
-  valueFormatter,
 }: {
   title: string;
   data: SeriesPoint[];
   unit?: string;
   color?: string;
   height?: number;
-  valueFormatter?: (v: number) => string;
 }) {
-  const fmt = valueFormatter ?? faNum;
+  // Values are formatted here rather than via a `valueFormatter` prop: these
+  // are Client Components, and a Server Component page cannot pass a function
+  // across that boundary. `faNum` already groups digits and renders them in
+  // Persian, which is the only format these charts need.
+  const fmt = faNum;
 
   if (data.length === 0) return <ChartEmpty />;
 

@@ -10,16 +10,18 @@ export function BarChart({
   title,
   data,
   color = CHART_COLORS.accent,
-  valueFormatter,
   maxBars = 8,
 }: {
   title: string;
   data: BarDatum[];
   color?: string;
-  valueFormatter?: (v: number) => string;
   maxBars?: number;
 }) {
-  const fmt = valueFormatter ?? faNum;
+  // Values are formatted here rather than via a `valueFormatter` prop: these
+  // are Client Components, and a Server Component page cannot pass a function
+  // across that boundary. `faNum` already groups digits and renders them in
+  // Persian, which is the only format these charts need.
+  const fmt = faNum;
   const rows = data.slice(0, maxBars);
 
   if (rows.length === 0) return <ChartEmpty />;

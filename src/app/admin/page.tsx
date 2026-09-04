@@ -203,7 +203,7 @@ export default async function AdminDashboardPage({
       {/* Charts row */}
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         <Panel title="روند درآمد" description={period.label} className="lg:col-span-2">
-          <AreaLineChart title="روند درآمد" data={revenueSeries} unit="تومان" valueFormatter={(v) => toPersianDigits(v.toLocaleString('en-US'))} />
+          <AreaLineChart title="روند درآمد" data={revenueSeries} unit="تومان" />
         </Panel>
         <Panel title="وضعیت سفارش‌ها" description={period.label}>
           <DonutChart

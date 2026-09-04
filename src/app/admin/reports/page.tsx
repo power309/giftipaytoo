@@ -102,7 +102,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
       </div>
 
       <Panel title="روند فروش" className="mt-4">
-        <AreaLineChart title="روند فروش" data={revenue} unit="تومان" valueFormatter={(v) => toPersianDigits(v.toLocaleString('en-US'))} />
+        <AreaLineChart title="روند فروش" data={revenue} unit="تومان" />
       </Panel>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
