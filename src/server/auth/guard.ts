@@ -1,7 +1,21 @@
 import 'server-only';
-import { redirect } from 'next/navigation';
 import { getSessionUser, type SessionUser } from './session';
 import type { PermissionKey } from '@/lib/permissions';
+
+/**
+ * `next/navigation` is imported lazily on purpose.
+ *
+ * The background job worker runs outside the Next.js runtime and imports this
+ * module transitively (fulfillment → inventory codes → assertPermission). A
+ * static `import { redirect } from 'next/navigation'` initialises React
+ * context at module load and throws there, which silently disabled every
+ * inventory job handler. Only the three redirecting helpers below need it, and
+ * they are only ever called from a page render, so we resolve it on demand.
+ */
+async function pageRedirect(to: string): Promise<never> {
+  const { redirect } = await import('next/navigation');
+  return redirect(to);
+}
 
 /** Thrown by API routes when the caller lacks a required permission. */
 export class ForbiddenError extends Error {
@@ -22,7 +36,7 @@ export class UnauthorizedError extends Error {
 export async function requireUser(redirectTo?: string): Promise<SessionUser> {
   const user = await getSessionUser();
   if (!user) {
-    redirect(`/auth/login${redirectTo ? `?next=${encodeURIComponent(redirectTo)}` : ''}`);
+    await pageRedirect(`/auth/login${redirectTo ? `?next=${encodeURIComponent(redirectTo)}` : ''}`);
   }
   return user;
 }
@@ -33,10 +47,10 @@ export async function requirePermission(
   redirectTo = '/admin',
 ): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) redirect(`/auth/login?next=${encodeURIComponent(redirectTo)}`);
-  if (!user.isStaff) redirect('/');
-  if (user.twoFactorEnabled && !user.twoFactorOk) redirect('/auth/2fa');
-  if (!user.permissions.includes(permission)) redirect('/admin/forbidden');
+  if (!user) await pageRedirect(`/auth/login?next=${encodeURIComponent(redirectTo)}`);
+  if (!user.isStaff) await pageRedirect('/');
+  if (user.twoFactorEnabled && !user.twoFactorOk) await pageRedirect('/auth/2fa');
+  if (!user.permissions.includes(permission)) await pageRedirect('/admin/forbidden');
   return user;
 }
 
@@ -63,8 +77,8 @@ export function can(user: SessionUser | null, permission: PermissionKey): boolea
 
 export async function requireStaff(): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) redirect('/auth/login?next=/admin');
-  if (!user.isStaff) redirect('/');
-  if (user.twoFactorEnabled && !user.twoFactorOk) redirect('/auth/2fa');
+  if (!user) await pageRedirect('/auth/login?next=/admin');
+  if (!user.isStaff) await pageRedirect('/');
+  if (user.twoFactorEnabled && !user.twoFactorOk) await pageRedirect('/auth/2fa');
   return user;
 }

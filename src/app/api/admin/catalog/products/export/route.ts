@@ -1,5 +1,6 @@
 import 'server-only';
 import { NextRequest, NextResponse } from 'next/server';
+import ExcelJS from 'exceljs';
 import { assertPermission, ForbiddenError, UnauthorizedError } from '@/server/auth/guard';
 import { audit } from '@/server/audit';
 import { listProducts } from '@/app/admin/products/query';
@@ -42,6 +43,39 @@ export async function GET(req: NextRequest) {
     'sku', 'name_fa', 'name_en', 'slug', 'brand', 'category', 'status',
     'variant_count', 'lowest_price_toman', 'available_stock', 'sales_count', 'updated_at',
   ];
+
+  const format = sp.get('format') === 'xlsx' ? 'xlsx' : 'csv';
+
+  await audit({
+    action: 'product.export',
+    entity: 'Product',
+    actorId: actor.id,
+    actorType: 'STAFF',
+    summary: `خروجی ${format.toUpperCase()} — ${rows.length} محصول`,
+  });
+
+  if (format === 'xlsx') {
+    const wb = new ExcelJS.Workbook();
+    const sheet = wb.addWorksheet('products');
+    sheet.addRow(header);
+    sheet.getRow(1).font = { bold: true };
+    for (const r of rows) {
+      sheet.addRow([
+        r.sku, r.nameFa, r.nameEn ?? '', r.slug, r.brandName, r.categoryName, r.status,
+        r.variantCount, r.lowestPrice, r.availableStock, r.salesCount,
+        new Date(r.updatedAt).toISOString(),
+      ]);
+    }
+    sheet.columns.forEach((c) => (c.width = 20));
+    const buffer = await wb.xlsx.writeBuffer();
+    return new NextResponse(Buffer.from(buffer), {
+      headers: {
+        'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'content-disposition': `attachment; filename="products-${Date.now()}.xlsx"`,
+      },
+    });
+  }
+
   const lines = [header.join(',')];
   for (const r of rows) {
     lines.push(
@@ -55,14 +89,6 @@ export async function GET(req: NextRequest) {
     );
   }
   const csv = '﻿' + lines.join('\r\n');
-
-  await audit({
-    action: 'product.export',
-    entity: 'Product',
-    actorId: actor.id,
-    actorType: 'STAFF',
-    summary: `خروجی CSV — ${rows.length} محصول`,
-  });
 
   return new NextResponse(csv, {
     headers: {

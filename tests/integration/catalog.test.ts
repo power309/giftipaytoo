@@ -353,7 +353,9 @@ describe('listProducts — filters and facets return consistent counts', () => {
   it('brand filter narrows results and matches the brand facet count with no filter applied', async () => {
     const scoped = { categorySlug: childCategorySlug };
     const all = await listProducts(scoped, { perPage: 50 });
-    const brandAFacet = all.facets.brands.find((b) => b.value === (await db.brand.findUniqueOrThrow({ where: { id: brandAId } })).slug);
+    const brandASlug = (await db.brand.findUniqueOrThrow({ where: { id: brandAId } })).slug;
+    const brandAFacet = all.facets.brands.find((b) => b.value === brandASlug);
+    expect(brandAFacet).toBeDefined();
 
     const filtered = await listProducts({ ...scoped, brandSlugs: [brandAFacet!.value] }, { perPage: 50 });
     // brandA owns: visible product + draft + archived + scheduled + expired (4 hidden + 1 visible)
@@ -370,10 +372,13 @@ describe('listProducts — filters and facets return consistent counts', () => {
     // counts (one bucket per product) must sum to the same total as the list.
     expect(totalFromBuckets).toBe(all.total);
 
-    const bucket = PRICE_BUCKETS.find((b) => b.minToman === 0)!; // "تا ۱۰۰ هزار تومان" .. actually first bucket covers up to 100k
-    const cheapBucket = all.facets.priceBuckets.find((b) => b.value === bucket.key)!;
+    // The primary visible product is priced at 200,000 Toman — find the bucket that contains it.
+    const bucket = PRICE_BUCKETS.find((b) => (b.minToman == null || 200_000 >= b.minToman) && (b.maxToman == null || 200_000 < b.maxToman))!;
+    const matchingBucketFacet = all.facets.priceBuckets.find((b) => b.value === bucket.key)!;
+    expect(matchingBucketFacet.count).toBeGreaterThanOrEqual(1);
     const filtered = await listProducts({ ...scoped, priceMinToman: bucket.minToman ?? undefined, priceMaxToman: bucket.maxToman ?? undefined }, { perPage: 50 });
-    expect(filtered.total).toBe(cheapBucket.count);
+    expect(filtered.total).toBe(matchingBucketFacet.count);
+    expect(filtered.items.map((p) => p.id)).toContain(visibleProductId);
   });
 
   it('availability (in-stock only) filter matches the availability facet', async () => {

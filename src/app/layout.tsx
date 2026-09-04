@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import '@fontsource-variable/vazirmatn';
 import '@/styles/globals.css';
 import { ToastProvider } from '@/components/ui';
@@ -37,12 +38,17 @@ export const viewport: Viewport = {
  */
 const themeScript = `(function(){try{var t=localStorage.getItem('gp-theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();`;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Set by src/middleware.ts on every request — required so this inline
+  // script is allowed under the nonce-based script-src CSP (see
+  // docs/SECURITY.md). Absent only when middleware didn't run (e.g. a
+  // static export), in which case the script is simply skipped rather than
+  // rendered without a nonce and blocked by the browser anyway.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
+
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
+      <head>{nonce && <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />}</head>
       <body>
         <ToastProvider>{children}</ToastProvider>
       </body>

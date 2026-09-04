@@ -28,14 +28,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ orderNu
 
   const result = await fetchOrderStatus(orderNumber);
   if (!result.ok) {
-    if (result.reason === 'forbidden') {
-      return NextResponse.json({ ok: false, error: 'برای مشاهده این سفارش دسترسی ندارید.' }, { status: 403 });
-    }
-    if (result.reason === 'not-found') {
-      return NextResponse.json({ ok: false, error: 'سفارشی با این شماره پیدا نشد.' }, { status: 404 });
+    if (result.reason === 'forbidden' || result.reason === 'not-found') {
+      return NextResponse.json(
+        { ok: false, error: result.reason === 'forbidden' ? 'برای مشاهده این سفارش دسترسی ندارید.' : 'سفارشی با این شماره پیدا نشد.' },
+        { status: result.reason === 'forbidden' ? 403 : 404 },
+      );
     }
     const status = result.reason === 'unavailable' ? 503 : 500;
-    return NextResponse.json({ ok: false, error: result.messageFa }, { status });
+    const message = 'messageFa' in result ? result.messageFa : 'خطایی رخ داد.';
+    return NextResponse.json({ ok: false, error: message }, { status });
   }
 
   return NextResponse.json({ ok: true, status: result.data });

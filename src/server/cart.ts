@@ -115,26 +115,36 @@ export async function availabilityFor(variantIds: string[]): Promise<Record<stri
 
 // ── Cart resolution ──────────────────────────────────────────────
 
+/**
+ * External request context, matching how `src/app/api/cart/**` and the
+ * checkout route already call these actions (`fn(ctx, input)`, `ctx` built
+ * from that request's own `getSessionUser()`/`readCartKey()`). Every action
+ * below accepts it as an optional first argument; when omitted (as the unit
+ * tests in this repo do) it's derived the same way internally, so both
+ * calling conventions resolve to the same, real request session.
+ */
+export type CartContext = { userId: string | null; sessionKey: string | null };
+
 type ResolvedCart = { cartId: string; sessionKey: string; userId: string | null; isGuest: boolean };
 
-async function resolveCart(): Promise<ResolvedCart> {
-  const user = await getSessionUser();
+async function resolveCart(ctx?: CartContext | null): Promise<ResolvedCart> {
+  const userId = ctx ? ctx.userId : ((await getSessionUser())?.id ?? null);
   const expiresAt = new Date(Date.now() + CART_EXPIRY_DAYS * 86_400_000);
 
-  if (user) {
-    const existing = await db.cart.findFirst({ where: { userId: user.id }, select: { id: true, sessionKey: true } });
+  if (userId) {
+    const existing = await db.cart.findFirst({ where: { userId }, select: { id: true, sessionKey: true } });
     if (existing) {
       await db.cart.update({ where: { id: existing.id }, data: { expiresAt } });
-      return { cartId: existing.id, sessionKey: existing.sessionKey, userId: user.id, isGuest: false };
+      return { cartId: existing.id, sessionKey: existing.sessionKey, userId, isGuest: false };
     }
     const created = await db.cart.create({
-      data: { userId: user.id, sessionKey: `user:${user.id}:${Date.now().toString(36)}`, expiresAt },
+      data: { userId, sessionKey: `user:${userId}:${Date.now().toString(36)}`, expiresAt },
       select: { id: true, sessionKey: true },
     });
-    return { cartId: created.id, sessionKey: created.sessionKey, userId: user.id, isGuest: false };
+    return { cartId: created.id, sessionKey: created.sessionKey, userId, isGuest: false };
   }
 
-  const sessionKey = await getOrCreateCartKey();
+  const sessionKey = ctx?.sessionKey || (await getOrCreateCartKey());
   const existing = await db.cart.findUnique({ where: { sessionKey }, select: { id: true } });
   if (existing) {
     await db.cart.update({ where: { id: existing.id }, data: { expiresAt } });
@@ -381,14 +391,32 @@ async function hydrate(resolved: ResolvedCart, opts: { useWallet?: boolean } = {
   };
 }
 
-export async function getCart(): Promise<CartView> {
-  const resolved = await resolveCart();
+export async function getCart(ctx?: CartContext | null): Promise<CartView> {
+  const resolved = await resolveCart(ctx);
   return hydrate(resolved);
 }
 
 // ── Mutations ────────────────────────────────────────────────────
 
 type MutationResult = CartView | { ok: false; error: string };
+type MutationInput = FormData | Record<string, unknown>;
+
+/**
+ * Every mutation below is dual-callable: `fn(input)` — this repo's tests and
+ * one storefront caller — or `fn(ctx, input)` — the `(shop)` route group's
+ * REST handlers, which already resolve `{ userId, sessionKey }` themselves
+ * from the same request and pass it explicitly. Argument *count* (not
+ * shape) disambiguates the two: when a second argument is present, the
+ * first is the context; otherwise the first argument is the input and the
+ * context is derived from the request's own session/cookie, same as ever.
+ */
+function splitCartArgs(
+  a: CartContext | MutationInput | null | undefined,
+  b: MutationInput | undefined,
+): { ctx: CartContext | null; input: MutationInput } {
+  if (b !== undefined) return { ctx: (a as CartContext | null) ?? null, input: b };
+  return { ctx: null, input: (a as MutationInput | null | undefined) ?? {} };
+}
 
 async function loadVariantForCart(variantId: string) {
   return db.productVariant.findUnique({
@@ -397,7 +425,11 @@ async function loadVariantForCart(variantId: string) {
   });
 }
 
-export async function addToCart(input: FormData | Record<string, unknown>): Promise<MutationResult> {
+export async function addToCart(
+  ctxOrInput: CartContext | MutationInput | null | undefined,
+  maybeInput?: MutationInput,
+): Promise<MutationResult> {
+  const { ctx, input } = splitCartArgs(ctxOrInput, maybeInput);
   const parsed = addToCartSchema.safeParse(toPlainObject(input));
   if (!parsed.success) return { ok: false, error: firstZodMessage(parsed.error) };
   const { variantId, qty, regionAcknowledged } = parsed.data;
@@ -407,7 +439,7 @@ export async function addToCart(input: FormData | Record<string, unknown>): Prom
     return { ok: false, error: 'این کالا در حال حاضر برای خرید موجود نیست.' };
   }
 
-  const resolved = await resolveCart();
+  const resolved = await resolveCart(ctx);
   const existing = await db.cartItem.findUnique({
     where: { cartId_variantId: { cartId: resolved.cartId, variantId } },
   });
@@ -455,12 +487,16 @@ export async function addToCart(input: FormData | Record<string, unknown>): Prom
   return hydrate(resolved);
 }
 
-export async function updateQty(input: FormData | Record<string, unknown>): Promise<MutationResult> {
+export async function updateQty(
+  ctxOrInput: CartContext | MutationInput | null | undefined,
+  maybeInput?: MutationInput,
+): Promise<MutationResult> {
+  const { ctx, input } = splitCartArgs(ctxOrInput, maybeInput);
   const parsed = updateCartQtySchema.safeParse(toPlainObject(input));
   if (!parsed.success) return { ok: false, error: firstZodMessage(parsed.error) };
   const { cartItemId, qty } = parsed.data;
 
-  const resolved = await resolveCart();
+  const resolved = await resolveCart(ctx);
   // Ownership check: the item must belong to THIS cart.
   const item = await db.cartItem.findFirst({
     where: { id: cartItemId, cartId: resolved.cartId },
@@ -486,17 +522,21 @@ export async function updateQty(input: FormData | Record<string, unknown>): Prom
   return hydrate(resolved);
 }
 
-export async function removeItem(input: FormData | Record<string, unknown>): Promise<MutationResult> {
+export async function removeItem(
+  ctxOrInput: CartContext | MutationInput | null | undefined,
+  maybeInput?: MutationInput,
+): Promise<MutationResult> {
+  const { ctx, input } = splitCartArgs(ctxOrInput, maybeInput);
   const parsed = removeCartItemSchema.safeParse(toPlainObject(input));
   if (!parsed.success) return { ok: false, error: firstZodMessage(parsed.error) };
 
-  const resolved = await resolveCart();
+  const resolved = await resolveCart(ctx);
   await db.cartItem.deleteMany({ where: { id: parsed.data.cartItemId, cartId: resolved.cartId } });
   return hydrate(resolved);
 }
 
-export async function clearCart(): Promise<MutationResult> {
-  const resolved = await resolveCart();
+export async function clearCart(ctx?: CartContext | null): Promise<MutationResult> {
+  const resolved = await resolveCart(ctx);
   await db.$transaction([
     db.cartItem.deleteMany({ where: { cartId: resolved.cartId } }),
     db.cart.update({ where: { id: resolved.cartId }, data: { couponCode: null } }),
@@ -504,11 +544,15 @@ export async function clearCart(): Promise<MutationResult> {
   return hydrate(resolved);
 }
 
-export async function applyCoupon(input: FormData | Record<string, unknown>): Promise<MutationResult> {
+export async function applyCoupon(
+  ctxOrInput: CartContext | MutationInput | null | undefined,
+  maybeInput?: MutationInput,
+): Promise<MutationResult> {
+  const { ctx, input } = splitCartArgs(ctxOrInput, maybeInput);
   const parsed = applyCouponSchema.safeParse(toPlainObject(input));
   if (!parsed.success) return { ok: false, error: firstZodMessage(parsed.error) };
 
-  const resolved = await resolveCart();
+  const resolved = await resolveCart(ctx);
   const coupon = await db.coupon.findUnique({ where: { code: parsed.data.code } });
   if (!coupon) return { ok: false, error: 'کد تخفیف وارد شده معتبر نیست.' };
 
@@ -542,8 +586,8 @@ export async function applyCoupon(input: FormData | Record<string, unknown>): Pr
   return hydrate(resolved);
 }
 
-export async function removeCoupon(): Promise<MutationResult> {
-  const resolved = await resolveCart();
+export async function removeCoupon(ctx?: CartContext | null): Promise<MutationResult> {
+  const resolved = await resolveCart(ctx);
   await db.cart.update({ where: { id: resolved.cartId }, data: { couponCode: null } });
   return hydrate(resolved);
 }

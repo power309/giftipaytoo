@@ -59,8 +59,8 @@ export default async function BlogIndexPage({ searchParams }: Props) {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {items.map((p, i) => (
-              <BlogCard key={p.slug} post={p} priority={i < 3} />
+            {items.map((p) => (
+              <BlogCard key={p.slug} post={p} />
             ))}
           </div>
           <Pagination

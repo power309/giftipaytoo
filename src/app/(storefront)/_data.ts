@@ -33,16 +33,27 @@ export type { SortKey, ProductFilters, FacetOption, ProductListFacets };
  * thin re-export, so the real implementation is actually picked up.
  */
 
+const CATALOG_SPECIFIER = '@/server/catalog/queries';
+
+/**
+ * Resolves the optional catalog module.
+ *
+ * The specifier must be a string literal: a bundler cannot statically analyse
+ * `import(variable)`, so a variable specifier would fail at runtime and silently
+ * strand every caller on the direct-Prisma fallback below. The import is
+ * evaluated once and memoised.
+ */
+const catalogModule: Promise<Record<string, unknown> | null> = import(
+  '@/server/catalog/queries'
+)
+  .then((m) => m as unknown as Record<string, unknown>)
+  .catch(() => null);
+
 async function loadModule<T = Record<string, unknown>>(specifier: string): Promise<T | null> {
-  try {
-    const mod = (await import(specifier)) as T;
-    return mod;
-  } catch {
-    return null;
-  }
+  if (specifier !== CATALOG_SPECIFIER) return null;
+  return (await catalogModule) as T | null;
 }
 
-const CATALOG_SPECIFIER = '@/server/catalog/queries';
 
 // ── Shared filter/sort/pagination contracts ─────────────────────────────
 // (SortKey, SORT_LABELS, ProductFilters, FacetOption, ProductListFacets,

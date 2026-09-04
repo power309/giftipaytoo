@@ -15,15 +15,42 @@ import { logger } from '@/lib/logger';
  * *runtime*, which we catch below and turn into an honest "not available"
  * state instead of a build break or a crashed page.
  */
+/**
+ * Each specifier is a **string literal**. A variable specifier cannot be
+ * statically analysed by the bundler, so `import(variable)` always rejects at
+ * runtime and would strand every caller in the "unavailable" state while the
+ * real module sat right there. Imports are evaluated once and memoised; a
+ * genuine failure is still caught and reported honestly.
+ */
+const SEAM_LOADERS: Record<string, () => Promise<unknown>> = {
+  '@/server/cart': () => import('@/server/cart'),
+  '@/server/orders': () => import('@/server/orders'),
+  '@/server/payments/service': () => import('@/server/payments/service'),
+  '@/server/payments/registry': () => import('@/server/payments/registry'),
+  '@/server/inventory/codes': () => import('@/server/inventory/codes'),
+  '@/server/settings': () => import('@/server/settings'),
+};
+
+const seamCache = new Map<string, Promise<unknown | null>>();
+
 async function loadModule<T = Record<string, unknown>>(specifier: string): Promise<T | null> {
-  try {
-    const path = specifier;
-    const mod = await import(path);
-    return mod as T;
-  } catch (err) {
-    logger.warn('seam module unavailable', { specifier, err: err instanceof Error ? err.message : String(err) });
+  const loader = SEAM_LOADERS[specifier];
+  if (!loader) {
+    logger.warn('seam module not registered', { specifier });
     return null;
   }
+  let pending = seamCache.get(specifier);
+  if (!pending) {
+    pending = loader().catch((err: unknown) => {
+      logger.warn('seam module unavailable', {
+        specifier,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    });
+    seamCache.set(specifier, pending);
+  }
+  return (await pending) as T | null;
 }
 
 export type SeamOutcome<T> =

@@ -398,16 +398,26 @@ export async function seedCatalog(ctx: {
 
   const brandNameFaBySlug = new Map(BRANDS.map((b) => [b.slug, b.nameFa]));
 
-  // Several product "lines" share the same brand + region (e.g. PS Plus
-  // Essential/Extra/Deluxe US, or Xbox Game Pass Ultimate/Core US) and would
-  // otherwise collide on GP-<BRAND>-<REGION>-<DENOM>. When more than one
-  // product shares a brand+region pair, disambiguate the SKU with a short
-  // plan tag derived from the product slug; single-product pairs keep the
-  // plain pattern from the spec.
-  const brandRegionGroups = new Map<string, number>();
+  // A few product "lines" share both brand + region AND a denomination key
+  // (e.g. PS Plus Essential/Extra/Deluxe US all have a "1M"/"3M"/"12M" tier,
+  // or Xbox Game Pass Ultimate/Core US both have "1M") and would collide on
+  // GP-<BRAND>-<REGION>-<DENOM>. Products that merely share a brand+region
+  // (e.g. the PlayStation Store US gift card vs. PS Plus Essential US) never
+  // collide, since their denom keys differ, so they keep the plain pattern
+  // from the spec. Only products with an actual key clash get a short plan
+  // tag derived from the product slug.
+  const denomKeyOwners = new Map<string, Set<string>>(); // "brand|region|key" -> product slugs
   for (const p of PRODUCTS) {
-    const k = `${p.brandSlug}|${p.regionCode}`;
-    brandRegionGroups.set(k, (brandRegionGroups.get(k) ?? 0) + 1);
+    for (const d of p.denominations) {
+      const k = `${p.brandSlug}|${p.regionCode}|${d.key}`;
+      const set = denomKeyOwners.get(k) ?? new Set<string>();
+      set.add(p.slug);
+      denomKeyOwners.set(k, set);
+    }
+  }
+  const productsNeedingTag = new Set<string>();
+  for (const [, slugs] of denomKeyOwners) {
+    if (slugs.size > 1) for (const s of slugs) productsNeedingTag.add(s);
   }
   function planTag(def: ProductDef): string {
     let s = def.slug;
@@ -522,8 +532,7 @@ export async function seedCatalog(ctx: {
       isActive: boolean; isDefault: boolean; sortOrder: number;
     }[] = [];
 
-    const needsPlanTag = (brandRegionGroups.get(`${def.brandSlug}|${def.regionCode}`) ?? 1) > 1;
-    const tag = needsPlanTag ? planTag(def) : '';
+    const tag = productsNeedingTag.has(def.slug) ? planTag(def) : '';
 
     def.denominations.forEach((d, di) => {
       const sku = buildSku(def.brandSlug, def.regionCode, `${tag}${d.key}`);

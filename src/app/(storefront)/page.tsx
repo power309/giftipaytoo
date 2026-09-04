@@ -82,8 +82,8 @@ export default async function HomePage() {
         <section aria-labelledby="latest-posts">
           <SectionHeading title="از مجله گیفتی‌پی" subtitle="راهنما و آموزش‌های خرید و فعال‌سازی" id="latest-posts" />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {sections.latestPosts.map((p, i) => (
-              <BlogCard key={p.slug} post={p} priority={i === 0} />
+            {sections.latestPosts.map((p) => (
+              <BlogCard key={p.slug} post={p} />
             ))}
           </div>
         </section>

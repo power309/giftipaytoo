@@ -25,7 +25,9 @@ type CartModule = {
 
 async function loadCart(): Promise<CartModule | null> {
   try {
-    return (await import(CART_SPECIFIER)) as CartModule;
+    // Literal specifier: a variable one is invisible to the bundler and would
+    // always reject at runtime, permanently disabling add-to-cart.
+    return (await import('@/server/cart')) as unknown as CartModule;
   } catch {
     return null;
   }

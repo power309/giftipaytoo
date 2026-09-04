@@ -85,8 +85,9 @@ export function CheckoutClient({
   const [termsAccepted, setTermsAccepted] = React.useState(false);
   const [regionAckAll, setRegionAckAll] = React.useState(false);
 
+  type SubmitFailure = Exclude<SubmitOrderResult, { ok: true }>;
   const [submitting, setSubmitting] = React.useState(false);
-  const [submitError, setSubmitError] = React.useState<SubmitOrderResult | null>(null);
+  const [submitError, setSubmitError] = React.useState<SubmitFailure | null>(null);
   const [verification, setVerification] = React.useState<{
     channel: 'sms' | 'email';
     destinationMasked: string;
@@ -173,22 +174,22 @@ export function CheckoutClient({
 
     try {
       const result = await submitOrder(input);
-      if (result.ok && 'needsVerification' in result && result.needsVerification) {
+      if (!result.ok) {
+        if (otpCode && result.code === 'INVALID_OTP') {
+          setOtpError(result.messageFa);
+          return;
+        }
+        setSubmitError(result);
+        if (result.code === 'OUT_OF_STOCK' || result.code === 'EMPTY_CART') {
+          toast.push({ tone: 'danger', message: result.messageFa });
+        }
+        return;
+      }
+      if ('needsVerification' in result) {
         setVerification({ channel: result.channel, destinationMasked: result.destinationMasked, messageFa: result.messageFa });
         return;
       }
-      if (result.ok) {
-        window.location.href = result.redirectUrl;
-        return;
-      }
-      if (otpCode && result.code === 'INVALID_OTP') {
-        setOtpError(result.messageFa);
-        return;
-      }
-      setSubmitError(result);
-      if (result.code === 'OUT_OF_STOCK' || result.code === 'EMPTY_CART') {
-        toast.push({ tone: 'danger', message: result.messageFa });
-      }
+      window.location.href = result.redirectUrl;
     } catch {
       setSubmitError({ ok: false, code: 'UNKNOWN', messageFa: 'خطایی غیرمنتظره رخ داد. دوباره تلاش کنید.' });
     } finally {
