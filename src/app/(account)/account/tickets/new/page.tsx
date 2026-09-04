@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import { requireUser } from '@/server/auth/guard';
 import { db } from '@/server/db';
-import { SectionHeading, Card } from '@/components/ui';
+import { Card } from '@/components/ui';
+import { PageHeading } from '@/components/account/page-heading';
 import { listDepartments } from '../actions';
 import { NewTicketForm } from './ticket-form';
 
@@ -31,7 +32,7 @@ export default async function NewTicketPage({
 
   return (
     <div className="space-y-5">
-      <SectionHeading title="تیکت جدید" subtitle="شرح درخواست خود را بنویسید تا تیم پشتیبانی گیفتی‌پی بررسی کند." />
+      <PageHeading title="تیکت جدید" subtitle="شرح درخواست خود را بنویسید تا تیم پشتیبانی گیفتی‌پی بررسی کند." />
       <Card>
         <NewTicketForm departments={departments} orders={orders} defaultOrderId={defaultOrderId} />
       </Card>

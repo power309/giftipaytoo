@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowLeft, ArrowRight, ShoppingBag, Loader2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ShoppingBag, LogIn } from 'lucide-react';
 import Link from 'next/link';
 import { Alert, Button, Checkbox, EmptyState, useToast } from '@/components/ui';
 import { CHECKOUT_STEPS, StepIndicator, type CheckoutStepKey } from '@/components/checkout/step-indicator';
@@ -11,12 +11,18 @@ import { PaymentMethodSelector } from '@/components/checkout/payment-method-sele
 import { OrderSummary } from '@/components/checkout/order-summary';
 import { RegionAckSummary } from '@/components/checkout/region-ack-summary';
 import { ReviewLines } from '@/components/checkout/review-lines';
-import { OtpVerify } from '@/components/checkout/otp-verify';
 import type { CartDTO, GatewayDTO, SubmitOrderInput, SubmitOrderResult } from '@/app/(shop)/_lib/types';
 
 const SIMPLE_EMAIL_RE = /^\S+@\S+\.\S+$/;
 const SIMPLE_MOBILE_RE = /^(0|\+98|0098)?9\d{9}$/;
 
+/**
+ * Wallet application is a checkout-only, client-side toggle — `@/server/cart`'s
+ * `getCart()` never applies it (only `createOrderFromCart` does, using the
+ * live session), so there's no server round trip for the toggle itself; the
+ * server recomputes the real payable amount from scratch at submission and
+ * that is what actually gets charged.
+ */
 function withWalletApplied(cart: CartDTO, useWallet: boolean): CartDTO {
   const base = cart.totals;
   const walletAppliedToman = useWallet ? Math.min(base.walletBalanceToman, base.totalToman) : 0;
@@ -79,6 +85,7 @@ export function CheckoutClient({
   const [guestEmail, setGuestEmail] = React.useState('');
   const [guestMobile, setGuestMobile] = React.useState('');
   const [contactError, setContactError] = React.useState<string | null>(null);
+  const isGuest = !isSignedIn && contactMode === 'guest';
 
   const [useWallet, setUseWallet] = React.useState(false);
   const [gatewayKey, setGatewayKey] = React.useState<string | null>(null);
@@ -88,18 +95,17 @@ export function CheckoutClient({
   type SubmitFailure = Exclude<SubmitOrderResult, { ok: true }>;
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<SubmitFailure | null>(null);
-  const [verification, setVerification] = React.useState<{
-    channel: 'sms' | 'email';
-    destinationMasked: string;
-    messageFa: string;
-  } | null>(null);
-  const [otpError, setOtpError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (gateways.length === 1) setGatewayKey(gateways[0].key);
   }, [gateways]);
 
-  const cart = withWalletApplied(initialCart, useWallet);
+  // Wallet only ever applies to a signed-in account (see `createOrderFromCart`).
+  React.useEffect(() => {
+    if (isGuest && useWallet) setUseWallet(false);
+  }, [isGuest, useWallet]);
+
+  const cart = withWalletApplied(initialCart, useWallet && !isGuest);
   const hasBlockingIssues = initialCart.blockingIssues.length > 0;
   const regionRestrictedLines = cart.lines.filter((l) => l.requiresRegionAck);
   const needsRegionAck = regionRestrictedLines.length > 0;
@@ -155,43 +161,33 @@ export function CheckoutClient({
   const canSubmit =
     !!gatewayKey && termsAccepted && (!needsRegionAck || regionAckAll) && !hasBlockingIssues && !submitting;
 
-  async function doSubmit(otpCode?: string) {
+  async function doSubmit() {
     if (!gatewayKey) return;
     setSubmitting(true);
     setSubmitError(null);
-    if (!otpCode) setOtpError(null);
 
     const input: SubmitOrderInput = {
       termsAccepted: true,
       regionAcknowledged: regionAckAll,
-      useWallet,
+      useWallet: useWallet && !isGuest,
       gatewayKey: gatewayKey as SubmitOrderInput['gatewayKey'],
-      ...(contactMode === 'guest'
-        ? { guestContact: { email: guestEmail.trim() || undefined, mobile: guestMobile.trim() || undefined } }
-        : {}),
-      ...(otpCode ? { otpCode } : {}),
+      ...(contactMode === 'guest' ? { guestContact: { email: guestEmail.trim() || undefined, mobile: guestMobile.trim() || undefined } } : {}),
     };
 
     try {
       const result = await submitOrder(input);
       if (!result.ok) {
-        if (otpCode && result.code === 'INVALID_OTP') {
-          setOtpError(result.messageFa);
-          return;
-        }
         setSubmitError(result);
-        if (result.code === 'OUT_OF_STOCK' || result.code === 'EMPTY_CART') {
-          toast.push({ tone: 'danger', message: result.messageFa });
-        }
+        if (result.code === 'OUT_OF_STOCK') toast.push({ tone: 'danger', message: result.messageFa });
         return;
       }
-      if ('needsVerification' in result) {
-        setVerification({ channel: result.channel, destinationMasked: result.destinationMasked, messageFa: result.messageFa });
+      if ('paidByWallet' in result) {
+        router.push(`/checkout/result/${result.orderNumber}`);
         return;
       }
       window.location.href = result.redirectUrl;
     } catch {
-      setSubmitError({ ok: false, code: 'UNKNOWN', messageFa: 'خطایی غیرمنتظره رخ داد. دوباره تلاش کنید.' });
+      setSubmitError({ ok: false, code: 'REJECTED', messageFa: 'خطایی غیرمنتظره رخ داد. دوباره تلاش کنید.' });
     } finally {
       setSubmitting(false);
     }
@@ -249,6 +245,12 @@ export function CheckoutClient({
           {step === 'payment' && (
             <>
               <h2 className="text-base font-bold text-fg">روش پرداخت</h2>
+              {isGuest && (
+                <Alert tone="warn">
+                  در حال حاضر تکمیل پرداخت آنلاین برای خرید مهمان در دسترس نیست. سفارش شما ثبت می‌شود، اما برای
+                  پرداخت آن باید وارد حساب کاربری خود شوید یا ثبت‌نام کنید.
+                </Alert>
+              )}
               <PaymentMethodSelector
                 gateways={gateways}
                 unavailable={gatewaysUnavailable}
@@ -292,27 +294,26 @@ export function CheckoutClient({
                 }
               />
 
-              {verification && (
-                <OtpVerify
-                  channel={verification.channel}
-                  destinationMasked={verification.destinationMasked}
-                  messageFa={verification.messageFa}
-                  pending={submitting}
-                  error={otpError}
-                  onVerify={(code) => void doSubmit(code)}
-                />
-              )}
-
               {submitError && (
                 <Alert tone="danger" title="ثبت سفارش ناموفق بود">
                   {submitError.messageFa}
-                  {submitError.code === 'OUT_OF_STOCK' && submitError.lines?.length ? (
+                  {submitError.code === 'OUT_OF_STOCK' && submitError.lines.length ? (
                     <ul className="mt-1.5 list-inside list-disc">
                       {submitError.lines.map((l) => (
                         <li key={l}>{l}</li>
                       ))}
                     </ul>
                   ) : null}
+                  {submitError.code === 'GUEST_PAYMENT_UNSUPPORTED' && (
+                    <div className="mt-2">
+                      <Link href={`/auth/login?next=${encodeURIComponent(`/checkout/result/${submitError.orderNumber}`)}`}>
+                        <Button size="sm" variant="secondary">
+                          <LogIn className="size-4" aria-hidden />
+                          ورود / ثبت‌نام
+                        </Button>
+                      </Link>
+                    </div>
+                  )}
                 </Alert>
               )}
 
@@ -321,12 +322,9 @@ export function CheckoutClient({
                   <ArrowRight className="size-4" aria-hidden />
                   مرحله قبل
                 </Button>
-                {!verification && (
-                  <Button onClick={() => void doSubmit()} disabled={!canSubmit} loading={submitting}>
-                    {submitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
-                    پرداخت و ثبت سفارش
-                  </Button>
-                )}
+                <Button onClick={() => void doSubmit()} disabled={!canSubmit} loading={submitting}>
+                  پرداخت و ثبت سفارش
+                </Button>
               </div>
             </>
           )}
@@ -338,7 +336,7 @@ export function CheckoutClient({
             coupon={cart.coupon}
             quoteExpiresAt={cart.quoteExpiresAt}
             isStale={cart.isStale}
-            walletEligible={cart.totals.walletBalanceToman > 0}
+            walletEligible={!isGuest && cart.totals.walletBalanceToman > 0}
             onToggleWallet={setUseWallet}
           />
         </div>

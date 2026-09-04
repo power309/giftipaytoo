@@ -3,10 +3,18 @@ import { getSessionUser, readCartKey, clientIp } from '@/server/auth/session';
 import { assertCsrf, CsrfError } from '@/server/csrf';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
 import { applyCouponSchema, firstZodMessage } from '@/lib/schemas';
-import { SEAM, callSeam } from '@/app/(shop)/_lib/seams';
-import { fetchCart, couponFailureMessage } from '@/app/(shop)/_lib/cart-data';
+import { SEAM } from '@/app/(shop)/_lib/seams';
+import { runCartMutation, type CartMutationResponse } from '@/app/(shop)/_lib/cart-data';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * `@/server/cart`'s `evaluateCoupon` already returns one distinct, specific
+ * Persian message per failure reason (expired, min order not met, usage
+ * limit, not applicable to these products, already used by this account,
+ * …) — see `evaluateCoupon` in `src/server/cart.ts`. We surface `.error`
+ * verbatim rather than re-deriving our own reason codes on top of it.
+ */
 
 function errorResponse(err: unknown) {
   if (err instanceof CsrfError) return NextResponse.json({ ok: false, error: err.message }, { status: 403 });
@@ -33,33 +41,23 @@ export async function POST(req: Request) {
     }
 
     const sessionKey = await readCartKey();
+    const ctx = { userId: user?.id ?? null, sessionKey };
 
-    const outcome = await callSeam(
+    const result = await runCartMutation(
       SEAM.cart,
       async (mod) => {
         const applyCoupon = mod.applyCoupon as
-          | ((
-              ctx: { userId: string | null; sessionKey: string | null },
-              input: { code: string },
-            ) => Promise<unknown>)
+          | ((c: typeof ctx, input: { code: string }) => Promise<CartMutationResponse>)
           | undefined;
         if (typeof applyCoupon !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
-        return applyCoupon({ userId: user?.id ?? null, sessionKey }, { code: parsed.data.code });
+        return applyCoupon(ctx, { code: parsed.data.code });
       },
+      user?.walletBalance ?? 0,
       { unavailableMessageFa: 'اعمال کد تخفیف هنوز فعال نشده است.' },
     );
 
-    if (!outcome.ok) {
-      const reasonMessage =
-        outcome.reason === 'error' ? couponFailureMessage(outcome.code) || outcome.messageFa : outcome.messageFa;
-      return NextResponse.json(
-        { ok: false, error: reasonMessage, code: outcome.reason === 'error' ? outcome.code : undefined },
-        { status: outcome.reason === 'unavailable' ? 503 : 422 },
-      );
-    }
-
-    const cart = await fetchCart({ userId: user?.id ?? null, sessionKey });
-    return NextResponse.json({ ok: true, cart: cart.ok ? cart.data : null });
+    if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
+    return NextResponse.json({ ok: true, cart: result.cart });
   } catch (err) {
     return errorResponse(err);
   }
@@ -73,27 +71,21 @@ export async function DELETE() {
     await enforceRateLimit('coupon.apply', user?.id ?? (await clientIp()));
 
     const sessionKey = await readCartKey();
+    const ctx = { userId: user?.id ?? null, sessionKey };
 
-    const outcome = await callSeam(
+    const result = await runCartMutation(
       SEAM.cart,
       async (mod) => {
-        const removeCoupon = mod.removeCoupon as
-          | ((ctx: { userId: string | null; sessionKey: string | null }) => Promise<unknown>)
-          | undefined;
+        const removeCoupon = mod.removeCoupon as ((c: typeof ctx) => Promise<CartMutationResponse>) | undefined;
         if (typeof removeCoupon !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
-        return removeCoupon({ userId: user?.id ?? null, sessionKey });
+        return removeCoupon(ctx);
       },
+      user?.walletBalance ?? 0,
       { unavailableMessageFa: 'حذف کد تخفیف هنوز فعال نشده است.' },
     );
-    if (!outcome.ok) {
-      return NextResponse.json(
-        { ok: false, error: outcome.messageFa },
-        { status: outcome.reason === 'unavailable' ? 503 : 422 },
-      );
-    }
 
-    const cart = await fetchCart({ userId: user?.id ?? null, sessionKey });
-    return NextResponse.json({ ok: true, cart: cart.ok ? cart.data : null });
+    if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
+    return NextResponse.json({ ok: true, cart: result.cart });
   } catch (err) {
     return errorResponse(err);
   }

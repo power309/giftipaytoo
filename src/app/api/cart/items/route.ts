@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { db } from '@/server/db';
 import { getSessionUser, readCartKey, getOrCreateCartKey, clientIp } from '@/server/auth/session';
 import { assertCsrf, CsrfError } from '@/server/csrf';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
 import { addToCartSchema, removeCartItemSchema, quantitySchema, firstZodMessage } from '@/lib/schemas';
-import { SEAM, callSeam } from '@/app/(shop)/_lib/seams';
-import { fetchCart } from '@/app/(shop)/_lib/cart-data';
+import { SEAM } from '@/app/(shop)/_lib/seams';
+import { fetchCart, runCartMutation, type CartMutationResponse } from '@/app/(shop)/_lib/cart-data';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,21 +17,21 @@ export const dynamic = 'force-dynamic';
  * carry `variantId`/`cartItemId` + `qty` (+ a boolean acknowledgement). The
  * unit price is always resolved server-side inside `@/server/cart`, never
  * echoed back from the request body.
+ *
+ * `@/server/cart`'s `updateQty` only ever touches qty/price — there is no
+ * dedicated mutation there for toggling `CartItem.regionAcknowledged` on an
+ * existing line (only `addToCart` sets it, at insert time). So a
+ * region-ack-only PATCH is applied here directly with a narrowly-scoped,
+ * ownership-checked `updateMany` — never touching price/qty — rather than
+ * inventing a call the real module doesn't expose.
  */
 
-const patchSchema = z
-  .object({
-    cartItemId: z.string().min(1, 'شناسه ردیف سبد خرید نامعتبر است.'),
-    qty: quantitySchema.optional(),
-    regionAcknowledged: z.boolean().optional(),
-  })
-  .refine((v) => v.qty !== undefined || v.regionAcknowledged !== undefined, {
-    message: 'هیچ تغییری ارسال نشده است.',
-  });
+const patchQtySchema = z.object({ cartItemId: z.string().min(1), qty: quantitySchema });
+const patchAckSchema = z.object({ cartItemId: z.string().min(1), regionAcknowledged: z.boolean() });
 
 async function identify() {
   const user = await getSessionUser();
-  return { userId: user?.id ?? null };
+  return { userId: user?.id ?? null, walletBalanceToman: user?.walletBalance ?? 0 };
 }
 
 function errorResponse(err: unknown) {
@@ -47,7 +48,7 @@ function errorResponse(err: unknown) {
 export async function POST(req: Request) {
   try {
     await assertCsrf();
-    const { userId } = await identify();
+    const { userId, walletBalanceToman } = await identify();
     await enforceRateLimit('api.generic', userId ?? (await clientIp()));
 
     const body = await req.json().catch(() => null);
@@ -58,29 +59,21 @@ export async function POST(req: Request) {
 
     const sessionKey = userId ? await readCartKey() : await getOrCreateCartKey();
 
-    const outcome = await callSeam(
+    const result = await runCartMutation(
       SEAM.cart,
       async (mod) => {
         const addToCart = mod.addToCart as
-          | ((
-              ctx: { userId: string | null; sessionKey: string | null },
-              input: { variantId: string; qty: number; regionAcknowledged?: boolean },
-            ) => Promise<unknown>)
+          | ((ctx: { userId: string | null; sessionKey: string | null }, input: typeof parsed.data) => Promise<CartMutationResponse>)
           | undefined;
         if (typeof addToCart !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
         return addToCart({ userId, sessionKey }, parsed.data);
       },
+      walletBalanceToman,
       { unavailableMessageFa: 'افزودن به سبد خرید هنوز فعال نشده است.' },
     );
-    if (!outcome.ok) {
-      return NextResponse.json(
-        { ok: false, error: outcome.messageFa },
-        { status: outcome.reason === 'unavailable' ? 503 : 422 },
-      );
-    }
 
-    const cart = await fetchCart({ userId, sessionKey });
-    return NextResponse.json({ ok: true, cart: cart.ok ? cart.data : null });
+    if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
+    return NextResponse.json({ ok: true, cart: result.cart });
   } catch (err) {
     return errorResponse(err);
   }
@@ -89,40 +82,60 @@ export async function POST(req: Request) {
 export async function PATCH(req: Request) {
   try {
     await assertCsrf();
-    const { userId } = await identify();
+    const { userId, walletBalanceToman } = await identify();
     await enforceRateLimit('api.generic', userId ?? (await clientIp()));
 
     const body = await req.json().catch(() => null);
-    const parsed = patchSchema.safeParse(body);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ ok: false, error: 'درخواست نامعتبر است.' }, { status: 400 });
+    }
+
+    const sessionKey = await readCartKey();
+    const ctx = { userId, sessionKey };
+
+    if ('regionAcknowledged' in body && !('qty' in body)) {
+      const parsed = patchAckSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json({ ok: false, error: firstZodMessage(parsed.error) }, { status: 400 });
+      }
+      const cart = await db.cart.findFirst({
+        where: userId ? { userId } : { sessionKey: sessionKey ?? '__none__' },
+        select: { id: true },
+      });
+      if (!cart) {
+        return NextResponse.json({ ok: false, error: 'سبد خرید یافت نشد.' }, { status: 404 });
+      }
+      const updated = await db.cartItem.updateMany({
+        where: { id: parsed.data.cartItemId, cartId: cart.id },
+        data: { regionAcknowledged: parsed.data.regionAcknowledged },
+      });
+      if (updated.count === 0) {
+        return NextResponse.json({ ok: false, error: 'این کالا در سبد خرید شما یافت نشد.' }, { status: 404 });
+      }
+      const fresh = await fetchCart(ctx, walletBalanceToman);
+      return NextResponse.json({ ok: true, cart: fresh.ok ? fresh.data : null });
+    }
+
+    const parsed = patchQtySchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ ok: false, error: firstZodMessage(parsed.error) }, { status: 400 });
     }
 
-    const sessionKey = await readCartKey();
-
-    const outcome = await callSeam(
+    const result = await runCartMutation(
       SEAM.cart,
       async (mod) => {
         const updateQty = mod.updateQty as
-          | ((
-              ctx: { userId: string | null; sessionKey: string | null },
-              input: { cartItemId: string; qty?: number; regionAcknowledged?: boolean },
-            ) => Promise<unknown>)
+          | ((c: typeof ctx, input: { cartItemId: string; qty: number }) => Promise<CartMutationResponse>)
           | undefined;
         if (typeof updateQty !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
-        return updateQty({ userId, sessionKey }, parsed.data);
+        return updateQty(ctx, parsed.data);
       },
+      walletBalanceToman,
       { unavailableMessageFa: 'ویرایش سبد خرید هنوز فعال نشده است.' },
     );
-    if (!outcome.ok) {
-      return NextResponse.json(
-        { ok: false, error: outcome.messageFa },
-        { status: outcome.reason === 'unavailable' ? 503 : 422 },
-      );
-    }
 
-    const cart = await fetchCart({ userId, sessionKey });
-    return NextResponse.json({ ok: true, cart: cart.ok ? cart.data : null });
+    if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
+    return NextResponse.json({ ok: true, cart: result.cart });
   } catch (err) {
     return errorResponse(err);
   }
@@ -131,7 +144,7 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   try {
     await assertCsrf();
-    const { userId } = await identify();
+    const { userId, walletBalanceToman } = await identify();
     await enforceRateLimit('api.generic', userId ?? (await clientIp()));
 
     const body = await req.json().catch(() => null);
@@ -142,29 +155,24 @@ export async function DELETE(req: Request) {
 
     const sessionKey = await readCartKey();
 
-    const outcome = await callSeam(
+    const result = await runCartMutation(
       SEAM.cart,
       async (mod) => {
         const removeItem = mod.removeItem as
           | ((
               ctx: { userId: string | null; sessionKey: string | null },
               input: { cartItemId: string },
-            ) => Promise<unknown>)
+            ) => Promise<CartMutationResponse>)
           | undefined;
         if (typeof removeItem !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
         return removeItem({ userId, sessionKey }, parsed.data);
       },
+      walletBalanceToman,
       { unavailableMessageFa: 'حذف کالا از سبد خرید هنوز فعال نشده است.' },
     );
-    if (!outcome.ok) {
-      return NextResponse.json(
-        { ok: false, error: outcome.messageFa },
-        { status: outcome.reason === 'unavailable' ? 503 : 422 },
-      );
-    }
 
-    const cart = await fetchCart({ userId, sessionKey });
-    return NextResponse.json({ ok: true, cart: cart.ok ? cart.data : null });
+    if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: result.status });
+    return NextResponse.json({ ok: true, cart: result.cart });
   } catch (err) {
     return errorResponse(err);
   }

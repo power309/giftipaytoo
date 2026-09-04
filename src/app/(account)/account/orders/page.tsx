@@ -6,8 +6,9 @@ import { requireUser } from '@/server/auth/guard';
 import { db } from '@/server/db';
 import { formatToman } from '@/lib/money';
 import { formatJalali, toPersianDigits } from '@/lib/persian';
-import { Card, Badge, EmptyState, Pagination, SectionHeading } from '@/components/ui';
+import { Card, Badge, EmptyState, Pagination } from '@/components/ui';
 import { orderStatusInfo } from '@/components/account/status-labels';
+import { PageHeading } from '@/components/account/page-heading';
 import { OrdersFilterBar } from './filter-bar';
 
 export const metadata: Metadata = { title: 'سفارش‌های من' };
@@ -70,7 +71,7 @@ export default async function OrdersPage({
 
   return (
     <div className="space-y-5">
-      <SectionHeading title="سفارش‌های من" subtitle={`${toPersianDigits(total)} سفارش`} />
+      <PageHeading title="سفارش‌های من" subtitle={`${toPersianDigits(total)} سفارش`} />
 
       <Card>
         <OrdersFilterBar

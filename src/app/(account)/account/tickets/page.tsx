@@ -4,8 +4,9 @@ import { LifeBuoy, Plus } from 'lucide-react';
 import { requireUser } from '@/server/auth/guard';
 import { db } from '@/server/db';
 import { formatJalali } from '@/lib/persian';
-import { Card, Badge, EmptyState, SectionHeading } from '@/components/ui';
+import { Card, Badge, EmptyState } from '@/components/ui';
 import { ticketStatusInfo, ticketPriorityInfo } from '@/components/account/status-labels';
+import { PageHeading } from '@/components/account/page-heading';
 
 export const metadata: Metadata = { title: 'تیکت‌های پشتیبانی' };
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,7 @@ export default async function TicketsPage() {
 
   return (
     <div className="space-y-5">
-      <SectionHeading
+      <PageHeading
         title="پشتیبانی"
         subtitle={`${tickets.length.toLocaleString('fa-IR')} تیکت`}
         action={

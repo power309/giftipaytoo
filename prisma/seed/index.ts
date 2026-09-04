@@ -118,7 +118,7 @@ async function main() {
     await demo.seedDemoOrders(customers, staffIds);
     await demo.seedDemoReviews(customers);
 
-    const featuredProducts = await db.product.findMany({ where: { isFeatured: true }, select: { id: true } });
+    const featuredProducts = await db.product.findMany({ where: { isFeatured: true }, select: { id: true }, orderBy: { slug: 'asc' } });
     await demo.seedDemoCoupons(customerGroupIdBySlug.get('reseller'), featuredProducts.map((p) => p.id));
     await demo.seedDemoMisc(customers, staffIds, departmentIdBySlug);
     ok('داده‌های نمایشی کامل شد');

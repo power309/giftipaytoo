@@ -5,6 +5,7 @@ import { db } from '@/server/db';
 import { formatJalali } from '@/lib/persian';
 import { Card, Badge, EmptyState, SectionHeading, Rating } from '@/components/ui';
 import { reviewStatusInfo } from '@/components/account/status-labels';
+import { PageHeading } from '@/components/account/page-heading';
 import { PendingReviews, type PendingProduct } from './pending-reviews';
 
 export const metadata: Metadata = { title: 'دیدگاه‌های من' };
@@ -52,6 +53,8 @@ export default async function ReviewsPage() {
 
   return (
     <div className="space-y-8">
+      <PageHeading title="دیدگاه‌های من" subtitle="دیدگاه‌های ثبت‌شده و محصولات در انتظار نظر شما" />
+
       <div>
         <SectionHeading
           title="در انتظار دیدگاه شما"

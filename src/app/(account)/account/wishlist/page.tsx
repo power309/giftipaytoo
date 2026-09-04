@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { requireUser } from '@/server/auth/guard';
 import { db } from '@/server/db';
-import { SectionHeading } from '@/components/ui';
+import { PageHeading } from '@/components/account/page-heading';
 import { WishlistClient, type WishlistProduct } from './wishlist-client';
 
 export const metadata: Metadata = { title: 'علاقه‌مندی‌ها' };
@@ -46,7 +46,7 @@ export default async function WishlistPage() {
 
   return (
     <div className="space-y-5">
-      <SectionHeading title="علاقه‌مندی‌ها" subtitle={`${items.length.toLocaleString('fa-IR')} محصول`} />
+      <PageHeading title="علاقه‌مندی‌ها" subtitle={`${items.length.toLocaleString('fa-IR')} محصول`} />
       <WishlistClient initial={items} />
     </div>
   );

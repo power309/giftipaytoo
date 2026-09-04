@@ -15,7 +15,7 @@ export default async function ApprovalsPage() {
       orderBy: { createdAt: 'asc' },
       include: {
         variant: { select: { nameFa: true, sku: true, product: { select: { nameFa: true } } } },
-        requestedBy: { select: { displayName: true } },
+        requestedBy: { select: { firstName: true, lastName: true, email: true } },
       },
     }),
     db.priceChangeApproval.findMany({
@@ -24,11 +24,14 @@ export default async function ApprovalsPage() {
       take: 20,
       include: {
         variant: { select: { nameFa: true, sku: true, product: { select: { nameFa: true } } } },
-        requestedBy: { select: { displayName: true } },
-        reviewedBy: { select: { displayName: true } },
+        requestedBy: { select: { firstName: true, lastName: true, email: true } },
+        reviewedBy: { select: { firstName: true, lastName: true, email: true } },
       },
     }),
   ]);
+
+  const staffName = (u: { firstName: string | null; lastName: string | null; email: string | null } | null) =>
+    u ? [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email || 'کارشناس' : null;
 
   const toRow = (a: (typeof pending)[number]): ApprovalRow => ({
     id: a.id,
@@ -39,7 +42,7 @@ export default async function ApprovalsPage() {
     proposedToman: a.proposedToman,
     deltaPercentX100: a.deltaPercent,
     reason: a.reason,
-    requestedByName: a.requestedBy?.displayName ?? 'سیستم',
+    requestedByName: staffName(a.requestedBy) ?? 'سیستم',
     createdAt: a.createdAt.toISOString(),
     status: a.status,
   });
@@ -73,7 +76,7 @@ export default async function ApprovalsPage() {
                     <td className="p-2">{a.variant.product.nameFa} — {a.variant.nameFa}</td>
                     <td className="p-2 tnum">{a.currentToman.toLocaleString('fa-IR')} ← {a.proposedToman.toLocaleString('fa-IR')}</td>
                     <td className="p-2">{a.status === 'APPROVED' ? 'تأییدشده' : a.status === 'REJECTED' ? 'ردشده' : 'خودکار'}</td>
-                    <td className="p-2">{a.reviewedBy?.displayName ?? '—'}</td>
+                    <td className="p-2">{staffName(a.reviewedBy) ?? '—'}</td>
                     <td className="p-2 text-fg-faint">{a.reviewNote ?? '—'}</td>
                   </tr>
                 ))}

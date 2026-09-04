@@ -4,6 +4,7 @@ import { CheckCircle2, Clock3, FileText, LogIn, Search, ServerCrash, ShieldAlert
 import { Alert, Badge, Button } from '@/components/ui';
 import { formatToman } from '@/lib/money';
 import { formatJalali, toPersianDigits } from '@/lib/persian';
+import { getSessionUser } from '@/server/auth/session';
 import { fetchOrderResult } from '@/app/(shop)/_lib/order-data';
 import { fetchGateways } from '@/app/(shop)/_lib/gateways';
 import { classifyOrder, STATUS_LABEL_FA } from '@/components/checkout/order-status';
@@ -81,6 +82,8 @@ export default async function OrderResultPage({ params }: { params: Promise<{ or
 
   const order = result.order;
   const category = classifyOrder(order);
+  const user = await getSessionUser();
+  const isSignedIn = !!user;
 
   return (
     <div className="container-page max-w-3xl space-y-6 py-8">
@@ -114,7 +117,21 @@ export default async function OrderResultPage({ params }: { params: Promise<{ or
           <Alert tone="danger" title="پرداخت این سفارش انجام نشد">
             {order.failureReasonFa ?? 'پرداخت با خطا مواجه شد. مبلغی از حساب شما کسر نشده است.'}
           </Alert>
-          <RetryPanel orderNumber={orderNumber} />
+          {isSignedIn ? (
+            <RetryPanel orderNumber={orderNumber} />
+          ) : (
+            <Alert tone="info">
+              برای تلاش دوباره برای پرداخت این سفارش، ابتدا وارد حساب کاربری خود شوید.
+              <div className="mt-2">
+                <Link href={`/auth/login?next=${encodeURIComponent(`/checkout/result/${orderNumber}`)}`}>
+                  <Button size="sm">
+                    <LogIn className="size-4" aria-hidden />
+                    ورود / ثبت‌نام
+                  </Button>
+                </Link>
+              </div>
+            </Alert>
+          )}
         </>
       )}
 
@@ -160,9 +177,19 @@ export default async function OrderResultPage({ params }: { params: Promise<{ or
       {category === 'success' && (
         <section className="card space-y-4 p-5">
           <h2 className="text-sm font-bold text-fg">کدهای تحویل‌داده‌شده</h2>
-          <Alert tone="warn">
-            پس از نمایش هر کد، آن سفارش غیرقابل بازگشت وجه می‌شود. کد را در جای امنی ذخیره کنید.
-          </Alert>
+          {isSignedIn ? (
+            <Alert tone="warn">
+              پس از نمایش هر کد، آن سفارش غیرقابل بازگشت وجه می‌شود. کد را در جای امنی ذخیره کنید.
+            </Alert>
+          ) : (
+            <Alert tone="info">
+              مشاهده کد فقط برای حساب‌های کاربری در دسترس است.{' '}
+              <Link href={`/auth/login?next=${encodeURIComponent(`/checkout/result/${orderNumber}`)}`} className="font-semibold underline underline-offset-4">
+                وارد حساب کاربری شوید
+              </Link>{' '}
+              یا از طریق پشتیبانی کد خود را دریافت کنید.
+            </Alert>
+          )}
           <ul className="space-y-4">
             {order.items.map((item) =>
               item.deliveries.length === 0 ? (
@@ -176,7 +203,13 @@ export default async function OrderResultPage({ params }: { params: Promise<{ or
                       {item.productName} <span className="text-fg-muted">({item.variantName})</span> —{' '}
                       <span className="text-xs text-fg-faint">{CHANNEL_LABEL[delivery.channel] ?? delivery.channel}</span>
                     </p>
-                    <CodeReveal orderNumber={orderNumber} deliveryId={delivery.deliveryId} alreadyRevealed={delivery.revealed} />
+                    {isSignedIn && delivery.inventoryItemId ? (
+                      <CodeReveal orderNumber={orderNumber} inventoryItemId={delivery.inventoryItemId} alreadyRevealed={delivery.revealed} />
+                    ) : (
+                      <code dir="ltr" className="inline-block rounded-lg bg-surface-muted px-3 py-2 text-sm font-bold tracking-widest text-fg-faint">
+                        ••••-••••-••••
+                      </code>
+                    )}
                   </li>
                 ))
               ),

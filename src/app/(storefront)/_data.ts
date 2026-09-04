@@ -885,15 +885,16 @@ async function getHomeSectionsFallback(): Promise<HomeSections> {
   };
 }
 
+/**
+ * Deliberately does NOT delegate to `@/server/catalog/queries`.
+ *
+ * That module also exports a `getHomeSections`, but it returns a different
+ * shape (`banners` / `campaigns` / `topCategories` / `featuredBrands`) and has
+ * no blog or FAQ sections at all. The home page is typed against the shape
+ * built here, so this is the authoritative implementation for that route;
+ * delegating would hand the page an object missing half its fields.
+ */
 export async function getHomeSections(): Promise<HomeSections> {
-  const mod = await loadModule<{ getHomeSections?: () => Promise<HomeSections> }>(CATALOG_SPECIFIER);
-  if (mod?.getHomeSections) {
-    try {
-      return await mod.getHomeSections();
-    } catch {
-      /* fall through */
-    }
-  }
   return getHomeSectionsFallback();
 }
 

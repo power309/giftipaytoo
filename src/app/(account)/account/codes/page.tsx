@@ -2,7 +2,8 @@ import type { Metadata } from 'next';
 import { KeyRound } from 'lucide-react';
 import { requireUser } from '@/server/auth/guard';
 import { db } from '@/server/db';
-import { Card, EmptyState, SectionHeading } from '@/components/ui';
+import { Card, EmptyState } from '@/components/ui';
+import { PageHeading } from '@/components/account/page-heading';
 import { CodeLibraryList, type CodeGroup } from './library-list';
 
 export const metadata: Metadata = { title: 'کتابخانه کدهای دیجیتال' };
@@ -56,7 +57,7 @@ export default async function CodesLibraryPage() {
 
   return (
     <div className="space-y-5">
-      <SectionHeading
+      <PageHeading
         title="کتابخانه کدهای دیجیتال"
         subtitle="تمام کدهایی که تاکنون خریده‌اید — هر کد پیش‌فرض پنهان است و فقط با کلیک روی «نمایش» آشکار می‌شود."
       />

@@ -9,7 +9,10 @@ export const dynamic = 'force-dynamic';
 export default async function CartPage() {
   const user = await getSessionUser();
   const cartKey = await readCartKey();
-  const { cart, unavailable, errorFa } = await fetchCartOrEmpty({ userId: user?.id ?? null, sessionKey: cartKey });
+  const { cart, unavailable, errorFa } = await fetchCartOrEmpty(
+    { userId: user?.id ?? null, sessionKey: cartKey },
+    user?.walletBalance ?? 0,
+  );
 
   return (
     <div className="container-page py-6 sm:py-8">

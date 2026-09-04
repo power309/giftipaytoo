@@ -78,31 +78,6 @@ export const EMPTY_CART: CartDTO = {
   blockingIssues: [],
 };
 
-// ── Coupon apply ─────────────────────────────────────────────────────────
-
-export type CouponFailureReason =
-  | 'NOT_FOUND'
-  | 'EXPIRED'
-  | 'NOT_STARTED'
-  | 'MIN_ORDER'
-  | 'USAGE_LIMIT'
-  | 'PER_USER_LIMIT'
-  | 'NOT_APPLICABLE'
-  | 'ALREADY_APPLIED'
-  | 'INACTIVE';
-
-export const COUPON_FAILURE_MESSAGES: Record<CouponFailureReason, string> = {
-  NOT_FOUND: 'کد تخفیف وارد شده معتبر نیست.',
-  EXPIRED: 'مهلت استفاده از این کد تخفیف به پایان رسیده است.',
-  NOT_STARTED: 'این کد تخفیف هنوز فعال نشده است.',
-  MIN_ORDER: 'مبلغ سبد خرید شما به حداقل مبلغ لازم برای این کد تخفیف نرسیده است.',
-  USAGE_LIMIT: 'ظرفیت استفاده از این کد تخفیف تکمیل شده است.',
-  PER_USER_LIMIT: 'شما پیش‌تر از این کد تخفیف استفاده کرده‌اید.',
-  NOT_APPLICABLE: 'این کد تخفیف برای محصولات موجود در سبد خرید شما قابل استفاده نیست.',
-  ALREADY_APPLIED: 'یک کد تخفیف دیگر روی سبد خرید شما فعال است.',
-  INACTIVE: 'این کد تخفیف در حال حاضر غیرفعال است.',
-};
-
 // ── Payment gateways ─────────────────────────────────────────────────────
 
 export type GatewayDTO = {
@@ -117,10 +92,9 @@ export type GatewayDTO = {
 // ── Checkout submission ──────────────────────────────────────────────────
 
 /**
- * Mirrors `checkoutInputSchema` from `@/lib/schemas` (the shared validation
- * vocabulary every agent's checkout-adjacent code is expected to use) plus
- * `otpCode`, which is specific to the risk-verification retry and has no
- * shared schema of its own — validated ad hoc against `otpSchema` where used.
+ * Mirrors `checkoutInputSchema` from `@/lib/schemas` exactly — the real
+ * `createOrderFromCart` in `@/server/orders` validates its input against
+ * that very schema, so this is the real contract, not a guess.
  * `guestContact` absent = paying with the signed-in account.
  */
 export type SubmitOrderInput = {
@@ -129,34 +103,34 @@ export type SubmitOrderInput = {
   useWallet: boolean;
   guestContact?: { email?: string; mobile?: string };
   gatewayKey?: 'zarinpal' | 'wallet' | 'manual';
-  otpCode?: string;
 };
 
+/**
+ * `@/server/orders`'s real `createOrderFromCart` has no risk-driven "needs
+ * verification, retry with an OTP" path — an unverified signed-in account
+ * hitting the verification threshold is a hard rejection (its `error`
+ * message already explains what to go verify), and manual review
+ * (`needsReview`) never blocks checkout — the order is created normally and
+ * flagged for staff, which the result page explains. See docs/CHECKOUT.md
+ * "Seams" for the full write-up of this and the guest-payment/guest-reveal
+ * gaps reflected in the codes below.
+ */
 export type SubmitOrderResult =
   | { ok: true; redirectUrl: string; orderNumber: string }
-  | {
-      ok: true;
-      needsVerification: true;
-      orderNumber?: string;
-      channel: 'sms' | 'email';
-      destinationMasked: string;
-      messageFa: string;
-    }
-  | { ok: false; code: 'OUT_OF_STOCK'; messageFa: string; lines?: string[] }
-  | { ok: false; code: 'STALE_PRICING'; messageFa: string }
-  | { ok: false; code: 'WALLET_INSUFFICIENT'; messageFa: string }
-  | { ok: false; code: 'RISK_REJECTED'; messageFa: string }
-  | { ok: false; code: 'INVALID_OTP'; messageFa: string }
+  | { ok: true; paidByWallet: true; orderNumber: string }
+  | { ok: false; code: 'OUT_OF_STOCK'; messageFa: string; lines: string[] }
+  | { ok: false; code: 'GUEST_PAYMENT_UNSUPPORTED'; messageFa: string; orderNumber: string }
   | { ok: false; code: 'VALIDATION'; messageFa: string }
   | { ok: false; code: 'GATEWAY_UNAVAILABLE'; messageFa: string }
-  | { ok: false; code: 'EMPTY_CART'; messageFa: string }
   | { ok: false; code: 'SERVICE_UNAVAILABLE'; messageFa: string }
-  | { ok: false; code: 'UNKNOWN'; messageFa: string };
+  | { ok: false; code: 'REJECTED'; messageFa: string };
 
 // ── Order result / status ────────────────────────────────────────────────
 
 export type OrderItemDeliveryDTO = {
   deliveryId: string;
+  /** The InventoryItem id — this, not the delivery id, is what `revealCode` takes as `itemId`. */
+  inventoryItemId: string | null;
   channel: 'ACCOUNT' | 'EMAIL' | 'SMS';
   revealed: boolean;
 };

@@ -17,7 +17,7 @@ export default async function CheckoutPage() {
 
   const [{ cart, unavailable: cartUnavailable, errorFa: cartErrorFa }, { gateways, unavailable: gatewaysUnavailable }, guestCheckoutEnabled] =
     await Promise.all([
-      fetchCartOrEmpty({ userId: user?.id ?? null, sessionKey: cartKey }),
+      fetchCartOrEmpty({ userId: user?.id ?? null, sessionKey: cartKey }, user?.walletBalance ?? 0),
       fetchGateways(),
       isGuestCheckoutEnabled(),
     ]);

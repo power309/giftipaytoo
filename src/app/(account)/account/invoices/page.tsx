@@ -5,7 +5,8 @@ import { requireUser } from '@/server/auth/guard';
 import { db } from '@/server/db';
 import { formatToman } from '@/lib/money';
 import { formatJalali } from '@/lib/persian';
-import { Card, EmptyState, SectionHeading } from '@/components/ui';
+import { Card, EmptyState } from '@/components/ui';
+import { PageHeading } from '@/components/account/page-heading';
 
 export const metadata: Metadata = { title: 'فاکتورها' };
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,7 @@ export default async function InvoicesPage() {
 
   return (
     <div className="space-y-5">
-      <SectionHeading title="فاکتورها" subtitle="فاکتورهای صادرشده برای سفارش‌های پرداخت‌شده شما" />
+      <PageHeading title="فاکتورها" subtitle="فاکتورهای صادرشده برای سفارش‌های پرداخت‌شده شما" />
 
       {orders.length === 0 ? (
         <Card className="p-0">

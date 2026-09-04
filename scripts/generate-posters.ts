@@ -195,6 +195,12 @@ async function runTask(
 
 // ── Product type → poster kind / default region ─────────────────────────
 
+/** Scales an integer minor-unit amount to its human face value ("5000" → "50"). */
+function formatFaceValue(minorUnits: number, scale: number): string {
+  const whole = minorUnits / Math.pow(10, scale);
+  return Number.isInteger(whole) ? String(whole) : whole.toFixed(scale).replace(/\.?0+$/, '');
+}
+
 function kindForProductType(t: ProductType): PosterKind {
   switch (t) {
     case 'GIFT_CARD':
@@ -281,7 +287,12 @@ async function generatePosters(prisma: PrismaClient, cli: Cli, summary: Summary)
     isPopular: boolean;
     brand: { nameFa: string; nameEn: string; accentColor: string | null };
     media: { id: string; kind: string; path: string; sortOrder: number }[];
-    variants: { denominationMinor: number | null; currencyCode: string | null; region: { nameFa: string } | null }[];
+    variants: {
+      denominationMinor: number | null;
+      currencyCode: string | null;
+      currency: { minorUnits: number; symbol: string } | null;
+      region: { nameFa: string } | null;
+    }[];
   };
 
   let products: ProductRow[] = [];
@@ -300,7 +311,12 @@ async function generatePosters(prisma: PrismaClient, cli: Cli, summary: Summary)
         brand: { select: { nameFa: true, nameEn: true, accentColor: true } },
         media: { select: { id: true, kind: true, path: true, sortOrder: true } },
         variants: {
-          select: { denominationMinor: true, currencyCode: true, region: { select: { nameFa: true } } },
+          select: {
+            denominationMinor: true,
+            currencyCode: true,
+            currency: { select: { minorUnits: true, symbol: true } },
+            region: { select: { nameFa: true } },
+          },
           take: 1,
           orderBy: { sortOrder: 'asc' },
         },
@@ -344,9 +360,13 @@ async function generatePosters(prisma: PrismaClient, cli: Cli, summary: Summary)
       kind = kindForProductType(p.productType);
       const v = p.variants[0];
       regionLabel = v?.region?.nameFa;
-      denomination = v?.denominationMinor && v.currencyCode
-        ? `${toPersianDigits(v.denominationMinor)} ${v.currencyCode}`
-        : undefined;
+      // `denominationMinor` is in minor units (5000 = 50.00 AED), so it must be
+      // scaled by the currency's own `minorUnits` before it is shown. Printing
+      // it raw put "۵۰۰۰ AED" on a 50 AED card.
+      denomination =
+        v?.denominationMinor && v.currencyCode
+          ? `${toPersianDigits(formatFaceValue(v.denominationMinor, v.currency?.minorUnits ?? 2))} ${v.currencyCode}`
+          : undefined;
       badge = p.isFeatured ? 'ویژه' : p.isPopular ? 'پرفروش' : undefined;
       existingMedia = p.media;
     }

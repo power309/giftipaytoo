@@ -5,6 +5,7 @@ import { db } from '@/server/db';
 import { formatToman } from '@/lib/money';
 import { formatJalali } from '@/lib/persian';
 import { Card, Badge, EmptyState, SectionHeading, Alert } from '@/components/ui';
+import { PageHeading } from '@/components/account/page-heading';
 
 export const metadata: Metadata = { title: 'کیف پول' };
 export const dynamic = 'force-dynamic';
@@ -29,7 +30,7 @@ export default async function WalletPage() {
 
   return (
     <div className="space-y-6">
-      <SectionHeading title="کیف پول" />
+      <PageHeading title="کیف پول" />
 
       <Card className="bg-primary text-primary-contrast">
         <div className="flex items-center gap-4">

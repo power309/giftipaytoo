@@ -1,4 +1,6 @@
-import 'server-only';
+// Intentionally NOT 'server-only': this module holds pure filter constants and
+// Prisma where-clause builders (types only, no database access), and the admin
+// client components import those constants to render their filter controls.
 
 import type { Prisma } from '@prisma/client';
 import type { SearchParams } from '@/lib/admin-query';

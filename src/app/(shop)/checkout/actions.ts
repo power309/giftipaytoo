@@ -1,245 +1,172 @@
 'use server';
 
 import { z } from 'zod';
-import { checkoutInputSchema, otpSchema, firstZodMessage } from '@/lib/schemas';
-import { env } from '@/lib/env';
-import { getSessionUser, readCartKey, clientIp, clientUserAgent } from '@/server/auth/session';
-import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
+import { checkoutInputSchema, firstZodMessage } from '@/lib/schemas';
+import { getSessionUser, clientIp } from '@/server/auth/session';
 import { SEAM, callSeam } from '../_lib/seams';
-import { grantGuestOrderAccess, resolveOrderAccess } from '../_lib/order-access';
+import { grantGuestOrderAccess, type GuestContact } from '../_lib/order-access';
 import { fetchOrderResult } from '../_lib/order-data';
 import type { SubmitOrderInput, SubmitOrderResult } from '../_lib/types';
 
 /**
- * Expected contract for `createOrderFromCart` (from `@/server/orders`) and
- * `startPayment` (from `@/server/payments/service`) — documented in full in
- * docs/CHECKOUT.md. Both are read defensively below (this module owns the
- * *interpretation* of their result, not their implementation), and every
- * failure — missing module or a rejected order — turns into one of the
- * honest `SubmitOrderResult` variants the checkout page already knows how
- * to render. Nothing here ever fabricates a redirect or a "paid" state.
+ * `@/server/orders` and `@/server/payments/service` both exist now (they
+ * were being written concurrently when this file was first drafted — see
+ * docs/CHECKOUT.md "Seams" for the two real gaps this had to adapt to):
+ *
+ *   createOrderFromCart(input)  — ONE argument, exactly `checkoutInputSchema`'s
+ *                                  shape. No `ctx` — it resolves the session/cart
+ *                                  itself. No OTP/otpCode concept: an unverified,
+ *                                  high-risk *signed-in* account is a hard
+ *                                  rejection (`error` already explains what to
+ *                                  verify); `needsReview` never blocks — the
+ *                                  order is created and flagged for staff.
+ *
+ *   startPayment({orderId, gatewayKey, userId, ip}) — `userId` is REQUIRED
+ *                                  (non-nullable). Guest checkout can create an
+ *                                  order but currently has no way to pay for it
+ *                                  through this seam. We surface that honestly
+ *                                  (`GUEST_PAYMENT_UNSUPPORTED`) instead of
+ *                                  forcing an empty string through and letting
+ *                                  it come back as a confusing "no permission".
  *
  * Server Actions are already origin-checked by Next.js itself (see
  * `src/server/csrf.ts`'s docstring), so this needs no separate CSRF token —
  * unlike the REST routes under `src/app/api/cart/**`.
  */
 
-const submitSchema = checkoutInputSchema
-  .extend({ otpCode: otpSchema.optional() })
-  .refine((v) => !!v.gatewayKey, { message: 'روش پرداخت را انتخاب کنید.', path: ['gatewayKey'] });
+const submitSchema = checkoutInputSchema.refine((v) => !!v.gatewayKey, {
+  message: 'روش پرداخت را انتخاب کنید.',
+  path: ['gatewayKey'],
+});
 
-function fail(code: Exclude<SubmitOrderResult, { ok: true }>['code'], messageFa: string): SubmitOrderResult {
-  return { ok: false, code, messageFa } as SubmitOrderResult;
+type CreateOrderResult =
+  | { ok: true; orderId: string; orderNumber: string; payableToman: number; needsReview: boolean; riskMessage: string }
+  | { ok: false; error: string; shortage?: { productNameFa: string; requested: number; available: number }[] };
+
+type StartPaymentResult = { ok: true; redirectUrl: string; paymentId: string } | { ok: false; code: string; messageFa: string };
+
+function fail(code: Exclude<SubmitOrderResult, { ok: true }>['code'], messageFa: string, extra: Record<string, unknown> = {}): SubmitOrderResult {
+  return { ok: false, code, messageFa, ...extra } as SubmitOrderResult;
 }
 
 export async function submitOrder(input: SubmitOrderInput): Promise<SubmitOrderResult> {
   const parsed = submitSchema.safeParse(input);
-  if (!parsed.success) {
-    return fail('VALIDATION', firstZodMessage(parsed.error));
-  }
+  if (!parsed.success) return fail('VALIDATION', firstZodMessage(parsed.error));
   const data = parsed.data;
-  const isGuest = !!data.guestContact;
-
-  const user = await getSessionUser();
-  if (!isGuest && !user) {
-    return fail('VALIDATION', 'برای تکمیل خرید با حساب کاربری، ابتدا وارد شوید.');
-  }
-
-  const sessionKey = await readCartKey();
-  const ip = await clientIp();
-  const userAgent = await clientUserAgent();
-
-  try {
-    await enforceRateLimit('checkout.create', user?.id ?? ip);
-  } catch (err) {
-    if (err instanceof RateLimitError) return fail('VALIDATION', err.message);
-    throw err;
-  }
+  const guestContact: GuestContact | undefined = data.guestContact
+    ? { email: data.guestContact.email || undefined, mobile: data.guestContact.mobile || undefined }
+    : undefined;
 
   const createOutcome = await callSeam(
     SEAM.orders,
     async (mod) => {
-      const createOrderFromCart = mod.createOrderFromCart as
-        | ((ctx: unknown, input: unknown) => Promise<Record<string, unknown>>)
-        | undefined;
+      const createOrderFromCart = mod.createOrderFromCart as ((input: unknown) => Promise<CreateOrderResult>) | undefined;
       if (typeof createOrderFromCart !== 'function') throw new Error('ماژول ثبت سفارش کامل نیست.');
-      return createOrderFromCart(
-        { userId: user?.id ?? null, sessionKey },
-        {
-          isGuest,
-          contactEmail: data.guestContact?.email || null,
-          contactMobile: data.guestContact?.mobile || null,
-          useWallet: data.useWallet,
-          termsAccepted: data.termsAccepted,
-          regionAckAll: data.regionAcknowledged,
-          otpCode: data.otpCode ?? null,
-          ip,
-          userAgent,
-        },
-      );
+      return createOrderFromCart(data);
     },
     { unavailableMessageFa: 'ثبت سفارش هنوز در سرور راه‌اندازی نشده است. کمی بعد دوباره تلاش کنید.' },
   );
 
   if (!createOutcome.ok) {
-    if (createOutcome.reason === 'unavailable') return fail('SERVICE_UNAVAILABLE', createOutcome.messageFa);
-    return interpretOrderError(createOutcome.code, createOutcome.messageFa);
+    return createOutcome.reason === 'unavailable'
+      ? fail('SERVICE_UNAVAILABLE', createOutcome.messageFa)
+      : fail('REJECTED', createOutcome.messageFa);
   }
 
   const result = createOutcome.data;
-  const status = typeof result.status === 'string' ? result.status : undefined;
-  const needsVerification =
-    result.needsVerification === true || status === 'NEEDS_VERIFICATION' || status === 'UNDER_REVIEW';
-
-  if (needsVerification) {
-    const orderNumber = typeof result.orderNumber === 'string' ? result.orderNumber : undefined;
-    if (orderNumber && isGuest) await grantGuestOrderAccess(orderNumber);
-    return {
-      ok: true,
-      needsVerification: true,
-      orderNumber,
-      channel: result.channel === 'email' ? 'email' : 'sms',
-      destinationMasked: typeof result.destinationMasked === 'string' ? result.destinationMasked : '••••',
-      messageFa:
-        typeof result.messageFa === 'string' ? result.messageFa : 'برای تکمیل خرید، کد ارسال‌شده را وارد کنید.',
-    };
+  if (!result.ok) {
+    if (result.shortage && result.shortage.length > 0) {
+      return fail(
+        'OUT_OF_STOCK',
+        result.error,
+        { lines: result.shortage.map((s) => `${s.productNameFa} (${s.available} از ${s.requested} عدد موجود)`) },
+      );
+    }
+    return fail('REJECTED', result.error);
   }
 
-  const orderId = typeof result.orderId === 'string' ? result.orderId : undefined;
-  const orderNumber = typeof result.orderNumber === 'string' ? result.orderNumber : undefined;
-  if (!orderId || !orderNumber) {
-    return fail('UNKNOWN', 'سفارش ثبت شد اما شماره سفارش دریافت نشد. با پشتیبانی تماس بگیرید.');
+  const user = await getSessionUser();
+  if (guestContact) await grantGuestOrderAccess(result.orderNumber, guestContact);
+
+  if (result.payableToman <= 0) {
+    // Fully covered by wallet (or a 100% coupon) — nothing left to pay.
+    return { ok: true, paidByWallet: true, orderNumber: result.orderNumber };
   }
 
-  if (isGuest) await grantGuestOrderAccess(orderNumber);
-
-  try {
-    await enforceRateLimit('payment.start', user?.id ?? ip);
-  } catch (err) {
-    if (err instanceof RateLimitError) return fail('VALIDATION', err.message);
-    throw err;
+  if (!user) {
+    // The order exists (and the guest can already track/view it), but
+    // `startPayment` requires a signed-in userId — see the module docstring.
+    return fail('GUEST_PAYMENT_UNSUPPORTED', 'برای تکمیل پرداخت این سفارش، لطفاً وارد حساب کاربری خود شوید یا ثبت‌نام کنید.', {
+      orderNumber: result.orderNumber,
+    });
   }
 
+  const ip = await clientIp();
   const paymentOutcome = await callSeam(
     SEAM.paymentsService,
     async (mod) => {
-      const startPayment = mod.startPayment as ((input: unknown) => Promise<Record<string, unknown>>) | undefined;
+      const startPayment = mod.startPayment as ((input: unknown) => Promise<StartPaymentResult>) | undefined;
       if (typeof startPayment !== 'function') throw new Error('ماژول درگاه پرداخت کامل نیست.');
-      return startPayment({
-        orderId,
-        orderNumber,
-        gatewayKey: data.gatewayKey,
-        callbackUrl: `${env.appUrl}/checkout/result/${orderNumber}`,
-      });
+      return startPayment({ orderId: result.orderId, gatewayKey: data.gatewayKey, userId: user.id, ip });
     },
     { unavailableMessageFa: 'اتصال به درگاه پرداخت هنوز فعال نشده است.' },
   );
 
   if (!paymentOutcome.ok) {
-    if (paymentOutcome.reason === 'unavailable') return fail('SERVICE_UNAVAILABLE', paymentOutcome.messageFa);
-    return fail('GATEWAY_UNAVAILABLE', paymentOutcome.messageFa);
+    return paymentOutcome.reason === 'unavailable'
+      ? fail('SERVICE_UNAVAILABLE', paymentOutcome.messageFa)
+      : fail('GATEWAY_UNAVAILABLE', paymentOutcome.messageFa);
+  }
+  if (!paymentOutcome.data.ok) {
+    return fail('GATEWAY_UNAVAILABLE', paymentOutcome.data.messageFa);
   }
 
-  const redirectUrl = paymentOutcome.data.redirectUrl;
-  if (typeof redirectUrl !== 'string' || !redirectUrl) {
-    return fail(
-      'GATEWAY_UNAVAILABLE',
-      'سفارش ثبت شد اما آدرس بازگشت درگاه پرداخت دریافت نشد. سفارش شما در «سفارش‌های من» قابل پیگیری است.',
-    );
-  }
-
-  return { ok: true, redirectUrl, orderNumber };
+  return { ok: true, redirectUrl: paymentOutcome.data.redirectUrl, orderNumber: result.orderNumber };
 }
 
-function interpretOrderError(code: string | undefined, messageFa: string): SubmitOrderResult {
-  switch (code) {
-    case 'OUT_OF_STOCK':
-    case 'InsufficientStockError':
-      return fail('OUT_OF_STOCK', messageFa);
-    case 'STALE_PRICING':
-    case 'PriceStaleError':
-      return fail('STALE_PRICING', messageFa);
-    case 'WALLET_INSUFFICIENT':
-    case 'InsufficientWalletError':
-      return fail('WALLET_INSUFFICIENT', messageFa);
-    case 'RISK_REJECTED':
-    case 'RiskRejectedError':
-      return fail('RISK_REJECTED', messageFa);
-    case 'INVALID_OTP':
-    case 'InvalidOtpError':
-      return fail('INVALID_OTP', messageFa);
-    case 'EMPTY_CART':
-    case 'EmptyCartError':
-      return fail('EMPTY_CART', messageFa);
-    default:
-      return fail('UNKNOWN', messageFa);
-  }
-}
-
-// ── Retry payment on a failed/canceled/expired order ────────────────────
+// ── Retry payment on a still-payable order (AWAITING_PAYMENT/PENDING) ────
 
 const retrySchema = z.object({
   orderNumber: z.string().min(1),
   gatewayKey: z.enum(['zarinpal', 'wallet', 'manual']),
 });
 
-export type RetryPaymentResult =
-  | { ok: true; redirectUrl: string }
-  | { ok: false; messageFa: string };
+export type RetryPaymentResult = { ok: true; redirectUrl: string } | { ok: false; messageFa: string };
 
 /**
- * Starts a fresh payment attempt for an order that already exists (failed,
- * canceled or expired). Never trusts a client-supplied order id — it
- * re-resolves ownership exactly like the result page (`resolveOrderAccess`)
- * and re-reads the order server-side before calling `startPayment`, so this
- * can't be pointed at someone else's order.
+ * Starts a fresh payment attempt for an order that already exists. Never
+ * trusts a client-supplied order id — it re-resolves ownership exactly like
+ * the result page (`fetchOrderResult`) and re-reads the order server-side
+ * before calling `startPayment`, so this can't be pointed at someone else's
+ * order. Signed-in only, same as `submitOrder` above — see the module
+ * docstring on `startPayment`'s required `userId`.
  */
 export async function retryPayment(input: { orderNumber: string; gatewayKey: string }): Promise<RetryPaymentResult> {
   const parsed = retrySchema.safeParse(input);
   if (!parsed.success) return { ok: false, messageFa: firstZodMessage(parsed.error) };
 
-  const access = await resolveOrderAccess(parsed.data.orderNumber);
-  if (!access.ok) return { ok: false, messageFa: 'برای این عملیات دسترسی ندارید.' };
+  const user = await getSessionUser();
+  if (!user) {
+    return { ok: false, messageFa: 'برای تکمیل پرداخت این سفارش، لطفاً وارد حساب کاربری خود شوید.' };
+  }
 
   const order = await fetchOrderResult(parsed.data.orderNumber);
   if (order.kind !== 'ok') {
     return { ok: false, messageFa: 'سفارش پیدا نشد یا در حال حاضر در دسترس نیست.' };
   }
-  if (order.order.paymentStatus === 'PAID') {
-    return { ok: false, messageFa: 'این سفارش قبلاً پرداخت شده است.' };
-  }
-  if (!order.order.id) {
-    return { ok: false, messageFa: 'اطلاعات سفارش ناقص است. با پشتیبانی تماس بگیرید.' };
-  }
 
-  const user = await getSessionUser();
   const ip = await clientIp();
-  try {
-    await enforceRateLimit('payment.start', user?.id ?? ip);
-  } catch (err) {
-    if (err instanceof RateLimitError) return { ok: false, messageFa: err.message };
-    throw err;
-  }
-
   const paymentOutcome = await callSeam(
     SEAM.paymentsService,
     async (mod) => {
-      const startPayment = mod.startPayment as ((input: unknown) => Promise<Record<string, unknown>>) | undefined;
+      const startPayment = mod.startPayment as ((input: unknown) => Promise<StartPaymentResult>) | undefined;
       if (typeof startPayment !== 'function') throw new Error('ماژول درگاه پرداخت کامل نیست.');
-      return startPayment({
-        orderId: order.order.id,
-        orderNumber: order.order.orderNumber,
-        gatewayKey: parsed.data.gatewayKey,
-        callbackUrl: `${env.appUrl}/checkout/result/${order.order.orderNumber}`,
-      });
+      return startPayment({ orderId: order.order.id, gatewayKey: parsed.data.gatewayKey, userId: user.id, ip });
     },
     { unavailableMessageFa: 'اتصال به درگاه پرداخت هنوز فعال نشده است.' },
   );
 
   if (!paymentOutcome.ok) return { ok: false, messageFa: paymentOutcome.messageFa };
-  const redirectUrl = paymentOutcome.data.redirectUrl;
-  if (typeof redirectUrl !== 'string' || !redirectUrl) {
-    return { ok: false, messageFa: 'آدرس بازگشت درگاه پرداخت دریافت نشد.' };
-  }
-  return { ok: true, redirectUrl };
+  if (!paymentOutcome.data.ok) return { ok: false, messageFa: paymentOutcome.data.messageFa };
+  return { ok: true, redirectUrl: paymentOutcome.data.redirectUrl };
 }

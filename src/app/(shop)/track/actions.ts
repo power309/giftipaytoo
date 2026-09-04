@@ -5,7 +5,7 @@ import { identifierSchema, firstZodMessage } from '@/lib/schemas';
 import { clientIp } from '@/server/auth/session';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
 import { SEAM, callSeam } from '../_lib/seams';
-import { grantGuestOrderAccess } from '../_lib/order-access';
+import { grantGuestOrderAccess, type GuestContact } from '../_lib/order-access';
 
 /**
  * Guest order lookup by order number + the contact info used at checkout.
@@ -40,14 +40,20 @@ export async function trackOrder(input: { orderNumber: string; contact: string }
     throw err;
   }
 
+  // `identifierSchema` = email-or-normalized-mobile; a normalized Iranian
+  // mobile is always `09xxxxxxxxx`, so anything without `@` is the mobile.
+  const contact: GuestContact = parsed.data.contact.includes('@')
+    ? { email: parsed.data.contact }
+    : { mobile: parsed.data.contact };
+
   const outcome = await callSeam(
     SEAM.orders,
     async (mod) => {
       const getOrderByNumberForGuest = mod.getOrderByNumberForGuest as
-        | ((orderNumber: string, contact?: string) => Promise<Record<string, unknown> | null>)
+        | ((orderNumber: string, contact: GuestContact) => Promise<{ ok: true; order: unknown } | { ok: false; error: string }>)
         | undefined;
       if (typeof getOrderByNumberForGuest !== 'function') throw new Error('ماژول سفارش‌ها کامل نیست.');
-      return getOrderByNumberForGuest(parsed.data.orderNumber, parsed.data.contact);
+      return getOrderByNumberForGuest(parsed.data.orderNumber, contact);
     },
     { unavailableMessageFa: 'سرویس پیگیری سفارش هنوز راه‌اندازی نشده است. کمی بعد دوباره تلاش کنید.' },
   );
@@ -57,10 +63,10 @@ export async function trackOrder(input: { orderNumber: string; contact: string }
     // the same as "not found", so it's fine for this one to differ.
     return { ok: false, messageFa: outcome.messageFa };
   }
-  if (!outcome.data) {
+  if (!outcome.data.ok) {
     return { ok: false, messageFa: GENERIC_NOT_FOUND };
   }
 
-  await grantGuestOrderAccess(parsed.data.orderNumber);
+  await grantGuestOrderAccess(parsed.data.orderNumber, contact);
   return { ok: true, orderNumber: parsed.data.orderNumber };
 }

@@ -1,103 +1,126 @@
 import 'server-only';
-import { SEAM, callSeam, type SeamOutcome } from './seams';
+import { db } from '@/server/db';
+import { SEAM, callSeam } from './seams';
 import type { OrderResultDTO, OrderStatusDTO } from './types';
 import { resolveOrderAccess } from './order-access';
 
 /**
- * Expected contract for `@/server/orders` (documented in docs/CHECKOUT.md):
- *   getOrderForUser(userId, orderNumber) -> RawOrder | null
- *   getOrderByNumberForGuest(orderNumber, contact?) -> RawOrder | null
- * Both must return `null` (not throw) for "doesn't exist / not yours" so we
- * can show the same honest "not found" state without leaking which case it
- * was — see the IDOR notes in order-access.ts and docs/CHECKOUT.md.
+ * Real contract, read directly from `@/server/orders`:
+ *
+ *   getOrderForUser(orderId) -> { ok:false; error } | { ok:true; order }
+ *   getOrderByNumberForGuest(orderNumber, contact) -> same shape
+ *
+ * Both take the *database* order id, not the human-facing order number, and
+ * both are already fully ownership-checked internally (`getOrderForUser`
+ * re-derives the session itself via `assertUser()` and scopes its query to
+ * `{ id, userId: user.id }` — it can't be pointed at someone else's order).
+ * So resolving `orderNumber -> id` here with a plain, unscoped lookup is
+ * safe: worst case an id that isn't the caller's own just comes back
+ * "not found" from the real ownership check, never someone else's data.
+ *
+ * Their `order.items` include has no nested `deliveries` (`items: true`,
+ * not `items: { include: { deliveries: true } }`), so delivery/code rows
+ * are fetched here as one extra, read-only query.
  */
-type RawDelivery = { id?: string; channel?: string; firstRevealedAt?: string | Date | null };
-type RawOrderItem = {
-  id?: string;
-  productNameFa?: string;
-  variantNameFa?: string;
-  posterPath?: string | null;
-  qty?: number;
-  unitPriceToman?: number;
-  lineTotalToman?: number;
-  fulfilledQty?: number;
-  deliveries?: RawDelivery[];
-};
-type RawPayment = { status?: string; failureReason?: string | null; gateway?: string };
+
 type RawOrder = {
-  id?: string;
-  orderNumber?: string;
-  status?: string;
-  paymentStatus?: string;
-  fulfillmentStatus?: string;
-  needsReview?: boolean;
-  placedAt?: string | Date;
-  paidAt?: string | Date | null;
-  subtotalToman?: number;
-  discountToman?: number;
-  taxToman?: number;
-  feeToman?: number;
-  walletAppliedToman?: number;
-  totalToman?: number;
-  couponCode?: string | null;
-  items?: RawOrderItem[];
-  invoice?: { number?: string } | null;
-  payments?: RawPayment[];
+  id: string;
+  orderNumber: string;
+  status: string;
+  paymentStatus: string;
+  fulfillmentStatus: string;
+  needsReview: boolean;
+  placedAt: Date;
+  paidAt: Date | null;
+  subtotalToman: number;
+  discountToman: number;
+  taxToman: number;
+  feeToman: number;
+  walletAppliedToman: number;
+  totalToman: number;
+  couponCode: string | null;
+  items: {
+    id: string;
+    productNameFa: string;
+    variantNameFa: string;
+    posterPath: string | null;
+    qty: number;
+    unitPriceToman: number;
+    lineTotalToman: number;
+    fulfilledQty: number;
+  }[];
+  payments: { status: string }[];
 };
 
-function normalizeOrder(raw: RawOrder, fallbackOrderNumber: string): OrderResultDTO {
-  const items = Array.isArray(raw.items) ? raw.items : [];
-  const payments = Array.isArray(raw.payments) ? raw.payments : [];
-  const latestPayment = payments[payments.length - 1];
+async function deliveriesForItems(itemIds: string[]) {
+  if (itemIds.length === 0) return new Map<string, { deliveryId: string; inventoryItemId: string | null; channel: string; revealed: boolean }[]>();
+  const rows = await db.delivery.findMany({
+    where: { orderItemId: { in: itemIds } },
+    select: { id: true, orderItemId: true, inventoryItemId: true, channel: true, firstRevealedAt: true },
+    orderBy: { deliveredAt: 'asc' },
+  });
+  const map = new Map<string, { deliveryId: string; inventoryItemId: string | null; channel: string; revealed: boolean }[]>();
+  for (const r of rows) {
+    const list = map.get(r.orderItemId) ?? [];
+    list.push({ deliveryId: r.id, inventoryItemId: r.inventoryItemId, channel: r.channel, revealed: !!r.firstRevealedAt });
+    map.set(r.orderItemId, list);
+  }
+  return map;
+}
 
-  const failureReasonFa = (() => {
-    if (raw.status === 'FAILED' || raw.paymentStatus === 'FAILED' || raw.paymentStatus === 'VERIFICATION_FAILED') {
-      return latestPayment?.failureReason ?? 'پرداخت با خطا مواجه شد. مبلغی از حساب شما کسر نشده است.';
-    }
-    if (raw.status === 'CANCELED' || raw.paymentStatus === 'CANCELED') {
-      return 'پرداخت این سفارش لغو شد.';
-    }
-    if (raw.status === 'EXPIRED' || raw.paymentStatus === 'EXPIRED') {
-      return 'مهلت پرداخت این سفارش به پایان رسیده است.';
-    }
-    return null;
-  })();
+function classifyFailure(order: RawOrder): string | null {
+  if (order.status === 'CANCELED' || order.paymentStatus === 'CANCELED') return 'پرداخت این سفارش لغو شد.';
+  if (order.status === 'EXPIRED' || order.paymentStatus === 'EXPIRED') return 'مهلت پرداخت این سفارش به پایان رسیده است.';
+  if (order.paymentStatus === 'FAILED' || order.paymentStatus === 'VERIFICATION_FAILED' || order.status === 'FAILED') {
+    return 'پرداخت با خطا مواجه شد. مبلغی از حساب شما کسر نشده است.';
+  }
+  return null;
+}
+
+async function normalizeOrder(raw: RawOrder): Promise<OrderResultDTO> {
+  const deliveries = await deliveriesForItems(raw.items.map((i) => i.id)).catch(
+    () => new Map<string, { deliveryId: string; inventoryItemId: string | null; channel: string; revealed: boolean }[]>(),
+  );
+  const invoice = await db.invoice
+    .findUnique({ where: { orderId: raw.id }, select: { number: true } })
+    .catch(() => null);
 
   return {
-    id: raw.id ?? '',
-    orderNumber: raw.orderNumber ?? fallbackOrderNumber,
-    status: raw.status ?? 'PENDING',
-    paymentStatus: raw.paymentStatus ?? 'PENDING',
-    fulfillmentStatus: raw.fulfillmentStatus ?? 'UNFULFILLED',
-    needsReview: !!raw.needsReview,
-    placedAt: raw.placedAt ? new Date(raw.placedAt).toISOString() : new Date().toISOString(),
-    paidAt: raw.paidAt ? new Date(raw.paidAt).toISOString() : null,
+    id: raw.id,
+    orderNumber: raw.orderNumber,
+    status: raw.status,
+    paymentStatus: raw.paymentStatus,
+    fulfillmentStatus: raw.fulfillmentStatus,
+    needsReview: raw.needsReview,
+    placedAt: raw.placedAt.toISOString(),
+    paidAt: raw.paidAt ? raw.paidAt.toISOString() : null,
     totals: {
-      subtotalToman: raw.subtotalToman ?? 0,
-      discountToman: raw.discountToman ?? 0,
-      taxToman: raw.taxToman ?? 0,
-      feeToman: raw.feeToman ?? 0,
-      walletAppliedToman: raw.walletAppliedToman ?? 0,
-      totalToman: raw.totalToman ?? 0,
+      subtotalToman: raw.subtotalToman,
+      discountToman: raw.discountToman,
+      taxToman: raw.taxToman,
+      feeToman: raw.feeToman,
+      walletAppliedToman: raw.walletAppliedToman,
+      totalToman: raw.totalToman,
     },
-    couponCode: raw.couponCode ?? null,
-    items: items.map((it, idx) => ({
-      id: it.id ?? `item-${idx}`,
-      productName: it.productNameFa ?? 'محصول',
-      variantName: it.variantNameFa ?? '',
-      posterPath: it.posterPath ?? null,
-      qty: it.qty ?? 1,
-      unitPriceToman: it.unitPriceToman ?? 0,
-      lineTotalToman: it.lineTotalToman ?? (it.unitPriceToman ?? 0) * (it.qty ?? 1),
-      fulfilledQty: it.fulfilledQty ?? 0,
-      deliveries: (it.deliveries ?? []).map((d, di) => ({
-        deliveryId: d.id ?? `delivery-${idx}-${di}`,
+    couponCode: raw.couponCode,
+    items: raw.items.map((it) => ({
+      id: it.id,
+      productName: it.productNameFa,
+      variantName: it.variantNameFa,
+      posterPath: it.posterPath,
+      qty: it.qty,
+      unitPriceToman: it.unitPriceToman,
+      lineTotalToman: it.lineTotalToman,
+      fulfilledQty: it.fulfilledQty,
+      deliveries: (deliveries.get(it.id) ?? []).map((d) => ({
+        deliveryId: d.deliveryId,
+        inventoryItemId: d.inventoryItemId,
         channel: (d.channel as 'ACCOUNT' | 'EMAIL' | 'SMS') ?? 'ACCOUNT',
-        revealed: !!d.firstRevealedAt,
+        revealed: d.revealed,
       })),
     })),
-    invoiceUrl: raw.invoice?.number ? `/account/invoices/${raw.invoice.number}` : null,
-    failureReasonFa,
+    invoiceUrl: invoice?.number ? `/account/invoices/${invoice.number}` : null,
+    failureReasonFa: classifyFailure(raw),
   };
 }
 
@@ -117,17 +140,22 @@ export async function fetchOrderResult(orderNumber: string): Promise<OrderFetchR
     SEAM.orders,
     async (mod) => {
       if (access.mode === 'user') {
+        const row = await db.order.findUnique({ where: { orderNumber }, select: { id: true } });
+        if (!row) return { ok: false as const, error: 'سفارش یافت نشد.' };
         const getOrderForUser = mod.getOrderForUser as
-          | ((userId: string, orderNumber: string) => Promise<RawOrder | null>)
+          | ((orderId: string) => Promise<{ ok: true; order: RawOrder } | { ok: false; error: string }>)
           | undefined;
         if (typeof getOrderForUser !== 'function') throw new Error('ماژول سفارش‌ها کامل نیست.');
-        return getOrderForUser(access.userId, orderNumber);
+        return getOrderForUser(row.id);
       }
       const getOrderByNumberForGuest = mod.getOrderByNumberForGuest as
-        | ((orderNumber: string, contact?: string) => Promise<RawOrder | null>)
+        | ((
+            orderNumber: string,
+            contact: { email?: string; mobile?: string },
+          ) => Promise<{ ok: true; order: RawOrder } | { ok: false; error: string }>)
         | undefined;
       if (typeof getOrderByNumberForGuest !== 'function') throw new Error('ماژول سفارش‌ها کامل نیست.');
-      return getOrderByNumberForGuest(orderNumber);
+      return getOrderByNumberForGuest(orderNumber, access.contact);
     },
     { unavailableMessageFa: 'سرویس سفارش‌ها هنوز راه‌اندازی نشده است.' },
   );
@@ -137,8 +165,8 @@ export async function fetchOrderResult(orderNumber: string): Promise<OrderFetchR
       ? { kind: 'unavailable', messageFa: outcome.messageFa }
       : { kind: 'error', messageFa: outcome.messageFa };
   }
-  if (!outcome.data) return { kind: 'not-found' };
-  return { kind: 'ok', order: normalizeOrder(outcome.data, orderNumber) };
+  if (!outcome.data.ok) return { kind: 'not-found' };
+  return { kind: 'ok', order: await normalizeOrder(outcome.data.order) };
 }
 
 /** Trimmed status-only projection for the polling endpoint — never includes codes. */
@@ -153,7 +181,12 @@ export function toStatusDTO(order: OrderResultDTO): OrderStatusDTO {
   };
 }
 
-export async function fetchOrderStatus(orderNumber: string): Promise<SeamOutcome<OrderStatusDTO> | { ok: false; reason: 'forbidden' | 'not-found' }> {
+export type OrderStatusFetchResult =
+  | { ok: true; data: OrderStatusDTO }
+  | { ok: false; reason: 'forbidden' | 'not-found' }
+  | { ok: false; reason: 'unavailable' | 'error'; messageFa: string };
+
+export async function fetchOrderStatus(orderNumber: string): Promise<OrderStatusFetchResult> {
   const result = await fetchOrderResult(orderNumber);
   switch (result.kind) {
     case 'ok':

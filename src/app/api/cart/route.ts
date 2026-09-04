@@ -14,7 +14,7 @@ export async function GET() {
     return NextResponse.json({ ok: true, cart: EMPTY_CART });
   }
 
-  const outcome = await fetchCart({ userId: user?.id ?? null, sessionKey: cartKey });
+  const outcome = await fetchCart({ userId: user?.id ?? null, sessionKey: cartKey }, user?.walletBalance ?? 0);
   if (!outcome.ok) {
     return NextResponse.json(
       { ok: false, unavailable: outcome.reason === 'unavailable', error: outcome.messageFa, cart: EMPTY_CART },

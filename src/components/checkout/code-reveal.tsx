@@ -13,15 +13,16 @@ import { csrfFetch, parseApi } from './csrf-fetch';
  */
 export function CodeReveal({
   orderNumber,
-  deliveryId,
+  inventoryItemId,
   alreadyRevealed,
 }: {
   orderNumber: string;
-  deliveryId: string;
+  inventoryItemId: string;
   alreadyRevealed: boolean;
 }) {
   const [phase, setPhase] = React.useState<'masked' | 'confirm' | 'loading' | 'revealed' | 'error'>('masked');
   const [code, setCode] = React.useState<string | null>(null);
+  const [extra, setExtra] = React.useState<{ serial: string | null; pin: string | null }>({ serial: null, pin: null });
   const [error, setError] = React.useState<string | null>(null);
 
   async function reveal() {
@@ -30,11 +31,12 @@ export function CodeReveal({
     try {
       const res = await csrfFetch(`/api/orders/${encodeURIComponent(orderNumber)}/reveal`, {
         method: 'POST',
-        body: JSON.stringify({ deliveryId }),
+        body: JSON.stringify({ inventoryItemId }),
       });
-      const result = await parseApi<{ code: string }>(res);
+      const result = await parseApi<{ code: string; serial: string | null; pin: string | null }>(res);
       if (result.ok) {
         setCode(result.data.code);
+        setExtra({ serial: result.data.serial, pin: result.data.pin });
         setPhase('revealed');
       } else {
         setError(result.error);
@@ -55,6 +57,16 @@ export function CodeReveal({
           </code>
           <CopyButton text={code} label="کپی کد" />
         </div>
+        {extra.serial && (
+          <p className="text-xs text-fg-muted">
+            شماره سریال: <bdi dir="ltr" className="font-medium text-fg">{extra.serial}</bdi>
+          </p>
+        )}
+        {extra.pin && (
+          <p className="text-xs text-fg-muted">
+            پین: <bdi dir="ltr" className="font-medium text-fg">{extra.pin}</bdi>
+          </p>
+        )}
         <p className="text-xs text-fg-muted">این کد را در جای امنی نگه دارید. این سفارش دیگر قابل بازگشت وجه نیست.</p>
       </div>
     );
