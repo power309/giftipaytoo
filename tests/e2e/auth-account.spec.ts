@@ -33,9 +33,12 @@ test.describe('authentication', () => {
     await expect(page).toHaveURL(/\/auth\/login/);
   });
 
-  test('admin and account pages are noindex', async ({ page }) => {
-    const res = await page.goto('/admin');
-    const robots = res?.headers()['x-robots-tag'] ?? '';
-    expect(robots).toContain('noindex');
+  test('private areas are noindex', async ({ request }) => {
+    // maxRedirects: 0 — /admin answers 307 to unauthenticated callers, and
+    // following it would read the login page's headers instead of /admin's.
+    for (const path of ['/admin', '/account', '/checkout']) {
+      const res = await request.get(path, { maxRedirects: 0, failOnStatusCode: false });
+      expect(res.headers()['x-robots-tag'] ?? '', `no noindex on ${path}`).toContain('noindex');
+    }
   });
 });

@@ -84,8 +84,11 @@
   --border: var(--color-ink-200);
   --border-strong: var(--color-ink-300);
   --text: var(--color-ink-900);
-  --text-muted: var(--color-ink-500);
-  --text-faint: var(--color-ink-400);
+  /* Contrast-checked against --bg (#f7f8fb): muted 6.3:1, faint 4.9:1.
+     The previous ink-500/ink-400 pair measured 4.4:1 and 2.7:1 and failed
+     WCAG AA, which axe flagged across every page. */
+  --text-muted: #545b78;
+  --text-faint: #656c8c;
   --primary: var(--color-brand-600);
   --primary-hover: var(--color-brand-700);
   --primary-soft: var(--color-brand-50);
@@ -119,7 +122,8 @@
     --border-strong: #343a52;
     --text: #eef0f6;
     --text-muted: #9199b3;
-    --text-faint: #6b7391;
+    /* 5.3:1 on --bg, 5.0:1 on --surface; the previous #6b7391 was 3.9:1. */
+    --text-faint: #7d85a3;
     --primary: var(--color-brand-400);
     --primary-hover: var(--color-brand-300);
     --primary-soft: #1d1740;
@@ -148,7 +152,7 @@
   --border-strong: #343a52;
   --text: #eef0f6;
   --text-muted: #9199b3;
-  --text-faint: #6b7391;
+  --text-faint: #7d85a3;
   --primary: var(--color-brand-400);
   --primary-hover: var(--color-brand-300);
   --primary-soft: #1d1740;

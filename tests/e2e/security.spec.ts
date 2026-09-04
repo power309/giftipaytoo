@@ -38,10 +38,23 @@ test.describe('security headers and behaviour', () => {
     expect(body).not.toMatch(/DATABASE_URL|postgres:\/\/|AUTH_SECRET|ENCRYPTION_KEY/);
   });
 
-  test('an open redirect is refused', async ({ page }) => {
-    await page.goto('/auth/login?next=' + encodeURIComponent('https://evil.example.com'));
-    // Whatever happens, we must not end up on the external host.
-    expect(page.url()).not.toContain('evil.example.com');
+  test('a hostile ?next= is neutralised, not honoured', async ({ page, baseURL }) => {
+    const origin = new URL(baseURL!).origin;
+
+    for (const hostile of ['https://evil.example.com', '//evil.example.com', '/\\evil.example.com']) {
+      await page.goto('/auth/login?next=' + encodeURIComponent(hostile));
+
+      // We are still on our own origin (the query string may legitimately echo
+      // the raw parameter — what matters is that nothing points off-site).
+      expect(new URL(page.url()).origin).toBe(origin);
+
+      // No link or form on the page may target the hostile host.
+      const targets = await page.evaluate(() => [
+        ...[...document.querySelectorAll('a[href]')].map((a) => (a as HTMLAnchorElement).href),
+        ...[...document.querySelectorAll('form[action]')].map((f) => (f as HTMLFormElement).action),
+      ]);
+      expect(targets.filter((t) => t.includes('evil.example.com')), hostile).toEqual([]);
+    }
   });
 
   test('a protected API route rejects an unauthenticated caller', async ({ request }) => {
