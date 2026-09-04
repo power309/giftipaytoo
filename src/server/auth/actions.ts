@@ -255,11 +255,17 @@ export async function requestPasswordReset(
       },
     });
 
+    const viaEmail = user.email === identifier.toLowerCase();
     await notifyBestEffort({
       userId: user.id,
-      template: 'password-reset-link',
-      channels: [user.email === identifier.toLowerCase() ? 'EMAIL' : 'SMS'],
-      data: { token: rawToken, resetUrl: `${env.appUrl}/auth/reset-password?token=${rawToken}` },
+      email: viaEmail ? user.email : undefined,
+      phone: viaEmail ? undefined : user.phone,
+      template: 'password-reset',
+      channels: [viaEmail ? 'EMAIL' : 'SMS'],
+      data: {
+        resetUrl: `${env.appUrl}/auth/reset-password?token=${rawToken}`,
+        expiresMinutes: RESET_TOKEN_TTL_MINUTES,
+      },
     });
 
     await audit({

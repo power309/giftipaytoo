@@ -1,18 +1,15 @@
 import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
-import path from 'node:path';
 
 export default defineConfig({
   plugins: [tsconfigPaths()],
   resolve: {
-    alias: {
-      // The real `server-only` package throws unconditionally on import —
-      // Next.js's webpack config swaps it for a no-op in server bundles,
-      // but plain Node/Vitest has no such swap. Every src/server and
-      // src/lib module starts with `import 'server-only'`, so without this
-      // alias no server module could be imported directly in a test.
-      'server-only': path.resolve(__dirname, 'tests/stubs/server-only.ts'),
-    },
+    alias: [
+      // `server-only` throws unless the bundler resolves the `react-server`
+      // condition, which plain Vitest does not. Tests import server modules
+      // directly, so map it to the package's own no-op entry point.
+      { find: /^server-only$/, replacement: new URL('./tests/stubs/server-only.ts', import.meta.url).pathname },
+    ],
   },
   test: {
     environment: 'node',

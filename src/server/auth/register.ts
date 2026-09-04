@@ -41,15 +41,20 @@ async function uniqueReferralCode(): Promise<string> {
   return `${generateReferralCode()}${Date.now().toString(36).toUpperCase()}`.slice(0, 12);
 }
 
-async function notifyDuplicateRegistration(userId: string, identifier: string): Promise<void> {
+async function notifyDuplicateRegistration(userId: string): Promise<void> {
   try {
+    const owner = await db.user.findUnique({ where: { id: userId }, select: { email: true, phone: true, firstName: true } });
+    if (!owner) return;
     const mod: Record<string, unknown> = await import('@/server/notifications/service');
     if (typeof mod.notify === 'function') {
       await (mod.notify as (p: unknown) => Promise<unknown>)({
         userId,
-        template: 'register-attempt-duplicate',
-        channels: ['IN_APP', 'EMAIL'],
-        data: { identifier },
+        email: owner.email,
+        phone: owner.phone,
+        template: 'generic',
+        data: {
+          message: 'کسی تلاش کرد با این ایمیل یا شماره موبایل حساب جدیدی بسازد. اگر این شما نبودید، جای نگرانی نیست — حساب شما امن است.',
+        },
       });
     }
   } catch (err) {
@@ -88,7 +93,7 @@ export async function registerUser(input: FormData | Record<string, unknown>): P
   });
 
   if (existing) {
-    await notifyDuplicateRegistration(existing.id, identifier);
+    await notifyDuplicateRegistration(existing.id);
     await audit({
       action: 'auth.register.duplicateAttempt',
       entity: 'User',

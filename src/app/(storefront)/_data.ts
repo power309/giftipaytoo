@@ -774,7 +774,16 @@ export type HomeSections = {
   newest: ProductCardData[];
   discounted: ProductCardData[];
   popularBrands: { slug: string; nameFa: string; logoPath: string | null }[];
-  latestPosts: { slug: string; titleFa: string; excerptFa: string; coverPath: string | null; coverAlt: string | null; readingMinutes: number; publishedAt: string | null }[];
+  latestPosts: {
+    slug: string;
+    titleFa: string;
+    excerptFa: string;
+    coverPath: string | null;
+    coverAlt: string | null;
+    categoryFa: string | null;
+    readingMinutes: number;
+    publishedAt: string | null;
+  }[];
   faqs: { id: string; questionFa: string; answerFa: string }[];
 };
 
@@ -875,6 +884,7 @@ async function getHomeSectionsFallback(): Promise<HomeSections> {
         excerptFa: true,
         coverPath: true,
         coverAlt: true,
+        categoryFa: true,
         readingMinutes: true,
         publishedAt: true,
       },

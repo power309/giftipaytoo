@@ -15,9 +15,9 @@ import 'server-only';
  *    grouped/raw query instead of looping per row, so nothing here is N+1.
  */
 
-import { unstable_cache } from 'next/cache';
 import { Prisma, type DeliveryType } from '@prisma/client';
 import { db } from '@/server/db';
+import { safeCache } from './cache';
 import { logger } from '@/lib/logger';
 import { discountPercent } from '@/lib/money';
 import { effectiveUnitPrice } from '@/lib/pricing';
@@ -217,7 +217,7 @@ export type HomeSections = {
  * with `revalidateTag('catalog:home')` (or the narrower `catalog:products`)
  * whenever admin mutations change featured/popular/discount state.
  */
-export const getHomeSections = unstable_cache(
+export const getHomeSections = safeCache(
   async (): Promise<HomeSections> => {
     const now = new Date();
     const visible = visibleProductWhere(now);
@@ -647,7 +647,7 @@ export type CategoryNode = {
   children: CategoryNode[];
 };
 
-export const getCategoryTree = unstable_cache(
+export const getCategoryTree = safeCache(
   async (): Promise<CategoryNode[]> => {
     const rows = await db.category.findMany({
       where: { isActive: true },
@@ -741,7 +741,7 @@ export type BrandSummary = {
   accentColor: string | null;
 };
 
-export const listBrands = unstable_cache(
+export const listBrands = safeCache(
   async (): Promise<BrandSummary[]> =>
     db.brand.findMany({
       where: { isActive: true },

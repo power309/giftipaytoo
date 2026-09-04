@@ -34,7 +34,8 @@ export function parsePersianNumber(input: string): number | null {
  * Normalize Persian text for storage-side search comparison.
  * - Arabic ي/ك → Persian ی/ک
  * - Arabic-Indic + Persian digits → Latin
- * - remove diacritics, tatweel, ZWNJ
+ * - ZWNJ (half-space) becomes a space; other zero-width marks removed
+ * - remove diacritics and tatweel
  * - collapse whitespace, lowercase Latin
  */
 export function normalizeFa(input: string): string {
@@ -46,8 +47,10 @@ export function normalizeFa(input: string): string {
     .replace(/ة/g, 'ه') // ة → ه
     .replace(/[ً-ٰٟ]/g, '') // harakat
     .replace(/ـ/g, '') // tatweel
-    .replace(/[\u200B-\u200F\u2028\u2029]/g, '') // zero width / bidi marks
-    .replace(/‌/g, ' ') // ZWNJ → space so "گیفت‌کارت" matches "گیفت کارت"
+    // ZWNJ becomes a space FIRST, so "گیفت‌کارت" and "گیفت کارت" converge.
+    // Stripping it here instead would fuse the words and break that match.
+    .replace(/\u200C/g, ' ')
+    .replace(/[\u200B\u200D-\u200F\u2028\u2029\uFEFF]/g, '') // other zero-width / bidi marks
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()

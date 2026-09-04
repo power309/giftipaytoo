@@ -21,33 +21,29 @@ import { logger } from '@/lib/logger';
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
 
-function purposeTemplate(purpose: VerificationPurpose): string {
+function purposeLabelFa(purpose: VerificationPurpose): string {
   switch (purpose) {
     case 'EMAIL_VERIFY':
-      return 'verify-email';
+      return 'تأیید ایمیل';
     case 'PHONE_VERIFY':
-      return 'verify-phone';
+      return 'تأیید شماره موبایل';
     case 'PASSWORD_RESET':
-      return 'password-reset-otp';
+      return 'بازیابی گذرواژه';
     case 'LOGIN_2FA':
-      return 'login-2fa-otp';
+      return 'ورود با کد یک‌بارمصرف';
     case 'ORDER_CONFIRM':
-      return 'order-confirm-otp';
+      return 'تأیید سفارش';
     default:
-      return 'generic-otp';
+      return 'تأیید هویت';
   }
 }
 
 /**
- * Best-effort dispatch through the notifications agent's module. That module
- * is being built concurrently, so this is a lazy import wrapped in try/catch
- * with an honest fallback: if it isn't available (or doesn't yet export
- * `notify`), the code is still generated and stored — it just isn't
+ * Dispatches through `@/server/notifications/service` (`notify`, template
+ * key `otp-code`). Lazy-imported and wrapped in try/catch so this module
+ * still works standalone (e.g. under `tests/unit`, or if that module is
+ * ever unavailable): the code is still generated and stored — it just isn't
  * delivered — and a warning is logged so the gap is visible in dev.
- *
- * SEAM: expected contract is `notify({ userId?, template, channels, data })`
- * from `@/server/notifications/service`. Verify the real export matches once
- * that module lands.
  */
 async function dispatch(params: {
   userId?: string | null;
@@ -66,10 +62,11 @@ async function dispatch(params: {
     }
     await (mod.notify as (p: unknown) => Promise<unknown>)({
       userId: params.userId ?? undefined,
-      identifier: params.identifier,
-      template: purposeTemplate(params.purpose),
+      email: params.channel === 'EMAIL' ? params.identifier : undefined,
+      phone: params.channel === 'SMS' ? params.identifier : undefined,
+      template: 'otp-code',
       channels: [params.channel],
-      data: { code: params.code, expiresInMinutes: OTP_TTL_MINUTES },
+      data: { otpCode: params.code, purposeFa: purposeLabelFa(params.purpose), expiresMinutes: OTP_TTL_MINUTES },
     });
     return true;
   } catch (err) {

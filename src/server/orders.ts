@@ -44,20 +44,17 @@ const RESERVATION_MINUTES = env.limits.cartReservationMinutes;
 
 type ShortageLine = { variantId: string; productNameFa: string; requested: number; available: number };
 
-class ShortageError extends Error {
-  constructor(public readonly shortage: ShortageLine[]) {
-    super('موجودی برای برخی از اقلام سفارش شما کافی نیست.');
-    this.name = 'ShortageError';
-  }
-}
+type ReserveForOrderResult =
+  | { ok: true; reserved: { variantId: string; itemIds: string[] }[] }
+  | { ok: false; shortages: { variantId: string; requested: number; available: number }[] };
 
 type InventoryReservationModule = {
-  reserveInventory?: (opts: {
+  reserveForOrder?: (opts: {
     orderId: string;
     lines: { variantId: string; qty: number }[];
-    minutes: number;
-  }) => Promise<{ ok: boolean; shortage?: { variantId: string; available: number }[] }>;
-  releaseReservation?: (orderId: string) => Promise<void>;
+    minutes?: number;
+  }) => Promise<ReserveForOrderResult>;
+  releaseReservation?: (orderId: string, opts?: { actorId?: string | null }) => Promise<number>;
 };
 
 async function loadInventoryReservationModule(): Promise<InventoryReservationModule | null> {
@@ -69,71 +66,65 @@ async function loadInventoryReservationModule(): Promise<InventoryReservationMod
 }
 
 /**
- * Reserves inventory for the given order lines, inside the same transaction
- * that creates the order. Prefers the inventory agent's own module; falls
- * back to a direct, race-safe reservation against `InventoryItem` (row-level
- * `FOR UPDATE SKIP LOCKED`, mirroring `jobs/queue.ts`'s claim pattern) so
- * checkout works honestly before that module lands.
+ * Reserves inventory for an already-created order, deliberately AFTER the
+ * order row commits: `reserveForOrder` (inventory agent's module) manages
+ * its own transaction and takes `orderId` as a plain string tag — it isn't
+ * a foreign key, by that module's own design — so it cannot be nested
+ * inside `orders.ts`'s own `$transaction`. A shortage is therefore
+ * compensated for explicitly by the caller (cancel the order, release any
+ * coupon usage) rather than rolled back automatically.
+ *
+ * Falls back to a direct, race-safe reservation (row-level `FOR UPDATE SKIP
+ * LOCKED`, mirroring `jobs/queue.ts`'s claim pattern) if that module is ever
+ * unavailable, so checkout degrades honestly rather than silently.
  */
-async function reserveInventoryTx(
-  tx: Prisma.TransactionClient,
+async function reserveInventory(
   orderId: string,
   lines: { variantId: string; qty: number; productNameFa: string }[],
   minutes: number,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; shortage: ShortageLine[] }> {
   const mod = await loadInventoryReservationModule();
-  if (mod && typeof mod.reserveInventory === 'function') {
+  if (mod && typeof mod.reserveForOrder === 'function') {
     try {
-      const res = await mod.reserveInventory({
+      const res = await mod.reserveForOrder({
         orderId,
         lines: lines.map((l) => ({ variantId: l.variantId, qty: l.qty })),
         minutes,
       });
-      if (res && typeof res === 'object' && 'ok' in res) {
-        if (res.ok) return;
-        const byVariant = new Map((res.shortage ?? []).map((s) => [s.variantId, s.available]));
-        throw new ShortageError(
-          lines
-            .filter((l) => byVariant.has(l.variantId))
-            .map((l) => ({
-              variantId: l.variantId,
-              productNameFa: l.productNameFa,
-              requested: l.qty,
-              available: byVariant.get(l.variantId) ?? 0,
-            })),
-        );
-      }
+      if (res.ok) return { ok: true };
+      const byName = new Map(lines.map((l) => [l.variantId, l.productNameFa]));
+      return {
+        ok: false,
+        shortage: res.shortages.map((s) => ({ ...s, productNameFa: byName.get(s.variantId) ?? '' })),
+      };
     } catch (err) {
-      if (err instanceof ShortageError) throw err;
-      logger.warn('orders: inventory/reservation.reserveInventory failed, using direct fallback', {
+      logger.warn('orders: inventory/reservation.reserveForOrder failed, using direct fallback', {
         err: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
   const shortage: ShortageLine[] = [];
-  for (const line of lines) {
-    const rows = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "public"."inventory_items"
-      WHERE "variantId" = ${line.variantId} AND status = 'AVAILABLE'::"public"."InventoryStatus"
-      ORDER BY "createdAt" ASC
-      LIMIT ${line.qty}
-      FOR UPDATE SKIP LOCKED
-    `;
-    if (rows.length < line.qty) {
-      shortage.push({ variantId: line.variantId, productNameFa: line.productNameFa, requested: line.qty, available: rows.length });
-      continue;
+  await db.$transaction(async (tx) => {
+    for (const line of lines) {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "public"."inventory_items"
+        WHERE "variantId" = ${line.variantId} AND status = 'AVAILABLE'::"public"."InventoryStatus"
+        ORDER BY "createdAt" ASC
+        LIMIT ${line.qty}
+        FOR UPDATE SKIP LOCKED
+      `;
+      if (rows.length < line.qty) {
+        shortage.push({ variantId: line.variantId, productNameFa: line.productNameFa, requested: line.qty, available: rows.length });
+        continue;
+      }
+      await tx.inventoryItem.updateMany({
+        where: { id: { in: rows.map((r) => r.id) } },
+        data: { status: 'RESERVED', reservedUntil: new Date(Date.now() + minutes * 60_000), reservedForOrderId: orderId },
+      });
     }
-    await tx.inventoryItem.updateMany({
-      where: { id: { in: rows.map((r) => r.id) } },
-      data: {
-        status: 'RESERVED',
-        reservedUntil: new Date(Date.now() + minutes * 60_000),
-        reservedForOrderId: orderId,
-      },
-    });
-  }
-  if (shortage.length > 0) throw new ShortageError(shortage);
+  });
+  return shortage.length > 0 ? { ok: false, shortage } : { ok: true };
 }
 
 async function releaseReservation(orderId: string): Promise<void> {
@@ -155,21 +146,21 @@ async function releaseReservation(orderId: string): Promise<void> {
 }
 
 /**
- * Refuses checkout when a line's price hasn't been refreshed recently
- * enough to be trusted. Prefers the pricing agent's own guard; falls back
- * to checking `ProductVariant.priceUpdatedAt` against `pricing.staleHours`.
+ * Refuses checkout when pricing inputs (exchange rates) haven't been
+ * refreshed recently enough to be trusted. Prefers the pricing agent's own
+ * `checkoutPricingGuard`; falls back to checking each line's
+ * `ProductVariant.priceUpdatedAt` against `pricing.staleHours`.
  */
 async function checkPricingStaleness(variantIds: string[]): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const mod: Record<string, unknown> = await import('@/server/pricing-service');
     if (typeof mod.checkoutPricingGuard === 'function') {
-      const res = (await (mod.checkoutPricingGuard as (opts: unknown) => Promise<unknown>)({ variantIds })) as
-        | { ok: boolean; error?: string }
+      const res = (await (mod.checkoutPricingGuard as () => Promise<unknown>)()) as
+        | { ok: true }
+        | { ok: false; reasonFa: string }
         | undefined;
       if (res && typeof res === 'object' && 'ok' in res) {
-        return res.ok
-          ? { ok: true }
-          : { ok: false, error: res.error ?? 'قیمت برخی از اقلام سبد خرید نیاز به به‌روزرسانی دارد؛ صفحه را تازه کنید.' };
+        return res.ok ? { ok: true } : { ok: false, error: res.reasonFa };
       }
     }
   } catch (err) {
@@ -397,10 +388,15 @@ export async function createOrderFromCart(input: FormData | Record<string, unkno
     return { ok: false, error: explainFa(risk.flags) };
   }
 
+  let createdOrderId: string | null = null;
+
   try {
-    const { order, payableToman } = await db.$transaction(async (tx) => {
+    // Phase 1: create the order row + immutable item snapshot. Nothing here
+    // has an external side effect that would need compensating if inventory
+    // turns out to be short.
+    const created = await db.$transaction(async (tx) => {
       const orderNumber = await generateUniqueOrderNumber(tx);
-      const created = await tx.order.create({
+      const order = await tx.order.create({
         data: {
           orderNumber,
           userId: userId ?? null,
@@ -441,24 +437,9 @@ export async function createOrderFromCart(input: FormData | Record<string, unkno
           },
         },
       });
-
-      await reserveInventoryTx(
-        tx,
-        created.id,
-        lines.map((l) => ({ variantId: l.variantId, qty: l.qty, productNameFa: l.productNameFa })),
-        RESERVATION_MINUTES,
-      );
-
-      if (coupon) {
-        await tx.couponRedemption.create({
-          data: { couponId: coupon.id, userId: userId ?? null, orderId: created.id, discountToman: totals.discountToman },
-        });
-        await tx.coupon.update({ where: { id: coupon.id }, data: { usedCount: { increment: 1 } } });
-      }
-
       await tx.orderStatusHistory.create({
         data: {
-          orderId: created.id,
+          orderId: order.id,
           fromStatus: null,
           toStatus: 'PENDING',
           field: 'status',
@@ -466,6 +447,46 @@ export async function createOrderFromCart(input: FormData | Record<string, unkno
           actorType: userId ? 'USER' : 'SYSTEM',
         },
       });
+      return order;
+    });
+
+    createdOrderId = created.id;
+
+    // Phase 2: reserve inventory. `reserveForOrder` manages its own
+    // transaction (see comment above `reserveInventory`), so a shortage here
+    // must be compensated for explicitly rather than rolled back for free.
+    const reservation = await reserveInventory(
+      created.id,
+      lines.map((l) => ({ variantId: l.variantId, qty: l.qty, productNameFa: l.productNameFa })),
+      RESERVATION_MINUTES,
+    );
+
+    if (!reservation.ok) {
+      await db.$transaction([
+        db.order.update({ where: { id: created.id }, data: { status: 'CANCELED', canceledAt: new Date() } }),
+        db.orderStatusHistory.create({
+          data: {
+            orderId: created.id,
+            fromStatus: 'PENDING',
+            toStatus: 'CANCELED',
+            field: 'status',
+            actorType: 'SYSTEM',
+            note: 'کمبود موجودی هنگام رزرو',
+          },
+        }),
+      ]);
+      return { ok: false, error: 'موجودی برای برخی از اقلام سفارش شما کافی نیست.', shortage: reservation.shortage };
+    }
+
+    // Phase 3: reservation secured — now it's safe to consume the coupon,
+    // debit the wallet, and flip to PAID if nothing is left payable.
+    const { order, payableToman } = await db.$transaction(async (tx) => {
+      if (coupon) {
+        await tx.couponRedemption.create({
+          data: { couponId: coupon.id, userId: userId ?? null, orderId: created.id, discountToman: totals.discountToman },
+        });
+        await tx.coupon.update({ where: { id: coupon.id }, data: { usedCount: { increment: 1 } } });
+      }
 
       let walletAppliedToman = 0;
       if (useWallet && totals.walletAppliedToman > 0 && userId) {
@@ -481,7 +502,7 @@ export async function createOrderFromCart(input: FormData | Record<string, unkno
             type: 'DEBIT',
             amountToman: totals.walletAppliedToman,
             balanceAfter: u.walletBalance,
-            reason: `پرداخت بخشی از سفارش ${orderNumber} با کیف پول`,
+            reason: `پرداخت بخشی از سفارش ${created.orderNumber} با کیف پول`,
             orderId: created.id,
             idempotencyKey: `order-wallet-debit:${created.id}`,
           },
@@ -531,6 +552,20 @@ export async function createOrderFromCart(input: FormData | Record<string, unkno
       after: { totalToman: order.totalToman, riskScore: order.riskScore, needsReview },
     });
 
+    if (needsReview) {
+      try {
+        const { notifyAdmins } = await import('@/server/notifications/service');
+        await notifyAdmins('order.review', {
+          template: 'generic',
+          data: { message: `سفارش ${order.orderNumber} به دلیل امتیاز ریسک بالا نیاز به بررسی دستی دارد.` },
+        });
+      } catch (err) {
+        logger.warn('orders: could not notify admins of a review-needed order (lazy seam)', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     return {
       ok: true,
       orderId: order.id,
@@ -540,10 +575,18 @@ export async function createOrderFromCart(input: FormData | Record<string, unkno
       riskMessage: explainFa(risk.flags),
     };
   } catch (err) {
-    if (err instanceof ShortageError) {
-      return { ok: false, error: err.message, shortage: err.shortage };
+    logger.error('orders: createOrderFromCart failed', {
+      orderId: createdOrderId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    // Best-effort compensation: never leave a half-created order silently
+    // holding a reservation or coupon usage after an unexpected failure.
+    if (createdOrderId) {
+      await releaseReservation(createdOrderId).catch(() => undefined);
+      await db.order
+        .update({ where: { id: createdOrderId }, data: { status: 'FAILED' } })
+        .catch(() => undefined);
     }
-    logger.error('orders: createOrderFromCart failed', { err: err instanceof Error ? err.message : String(err) });
     return { ok: false, error: 'ثبت سفارش با خطا مواجه شد؛ لطفاً دوباره تلاش کنید.' };
   }
 }
