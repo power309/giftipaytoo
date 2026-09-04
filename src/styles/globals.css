@@ -93,11 +93,15 @@
   --primary-hover: var(--color-brand-700);
   --primary-soft: var(--color-brand-50);
   --primary-contrast: #ffffff;
-  --accent: var(--color-mint-600);
+  --accent: #00695c;
   --accent-soft: var(--color-mint-50);
-  --gold: var(--color-gold-600);
+  --gold: #8a5f0a;
   --gold-soft: var(--color-gold-100);
-  --danger: var(--color-danger-500);
+  /* These sit as text on their own soft background (badges, alerts), so each
+     pair is contrast-checked against that background, not against --bg:
+     danger 5.7:1, warn 4.7:1, accent 6.2:1, gold 5.0:1. The previous
+     danger/accent/gold values measured 4.2 / 3.6 / 2.9 and failed WCAG AA. */
+  --danger: #b91c1c;
   --danger-soft: var(--color-danger-50);
   --warn: var(--color-warn-600);
   --warn-soft: var(--color-warn-50);

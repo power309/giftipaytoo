@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { SEED_ADMIN, expectNoAppError, expectPersianRtl } from './helpers';
+import { expectNoAppError, expectPersianRtl } from './helpers';
 
 /**
  * Admin flows run signed in as the seeded super-admin. If the seed has not run,
@@ -7,13 +7,8 @@ import { SEED_ADMIN, expectNoAppError, expectPersianRtl } from './helpers';
  * admin panel actually works.
  */
 test.describe('admin panel', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/auth/login');
-    await page.locator('input[name="identifier"]').fill(SEED_ADMIN.email);
-    await page.locator('input[name="password"]').fill(SEED_ADMIN.password);
-    await page.getByRole('button', { name: /ورود/ }).first().click();
-    await page.waitForURL((u) => !u.pathname.startsWith('/auth/login'), { timeout: 20_000 });
-  });
+  // The session comes from the `setup` project's saved storage state — see
+  // playwright.config.ts. No per-test login, so the rate limiter stays happy.
 
   test('dashboard loads with real metrics', async ({ page }) => {
     await page.goto('/admin');

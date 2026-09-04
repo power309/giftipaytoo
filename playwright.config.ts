@@ -34,9 +34,26 @@ export default defineConfig({
     launchOptions,
   },
   projects: [
-    { name: 'desktop-chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } } },
-    { name: 'mobile-chromium', use: { ...devices['Pixel 7'] } },
-    { name: 'tablet-chromium', use: { ...devices['Galaxy Tab S4'] } },
+    // Signs in once; the admin project reuses the saved session so the suite
+    // does not trip the login rate limiter.
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    {
+      name: 'admin-chromium',
+      testMatch: /admin\.spec\.ts/,
+      dependencies: ['setup'],
+      use: {
+        ...devices['Desktop Chrome'],
+        viewport: { width: 1280, height: 900 },
+        storageState: 'tests/e2e/.auth/admin.json',
+      },
+    },
+    {
+      name: 'desktop-chromium',
+      testIgnore: /admin\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 900 } },
+    },
+    { name: 'mobile-chromium', testIgnore: /admin\.spec\.ts/, use: { ...devices['Pixel 7'] } },
+    { name: 'tablet-chromium', testIgnore: /admin\.spec\.ts/, use: { ...devices['Galaxy Tab S4'] } },
   ],
   webServer: process.env.E2E_BASE_URL
     ? undefined

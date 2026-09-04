@@ -48,12 +48,23 @@ test.describe('security headers and behaviour', () => {
       // the raw parameter — what matters is that nothing points off-site).
       expect(new URL(page.url()).origin).toBe(origin);
 
-      // No link or form on the page may target the hostile host.
-      const targets = await page.evaluate(() => [
-        ...[...document.querySelectorAll('a[href]')].map((a) => (a as HTMLAnchorElement).href),
-        ...[...document.querySelectorAll('form[action]')].map((f) => (f as HTMLFormElement).action),
-      ]);
-      expect(targets.filter((t) => t.includes('evil.example.com')), hostile).toEqual([]);
+      // No link or form may actually POINT AT the hostile host. Compare hosts,
+      // not raw strings — a same-origin URL legitimately echoes the parameter
+      // back inside its own query string.
+      const offsite = await page.evaluate(() => {
+        const urls = [
+          ...[...document.querySelectorAll('a[href]')].map((a) => (a as HTMLAnchorElement).href),
+          ...[...document.querySelectorAll('form[action]')].map((f) => (f as HTMLFormElement).action),
+        ];
+        return urls.filter((u) => {
+          try {
+            return new URL(u, location.href).host !== location.host;
+          } catch {
+            return false;
+          }
+        });
+      });
+      expect(offsite, hostile).toEqual([]);
     }
   });
 
