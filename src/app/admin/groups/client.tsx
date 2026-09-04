@@ -44,7 +44,7 @@ export function GroupsClient({ groups }: { groups: GroupRow[] }) {
   async function submit() {
     setBusy(true);
     setError(null);
-    const res = await saveCustomerGroup({ id: editing?.id, ...form });
+    const res = await saveCustomerGroup({ id: editing?.id, ...form, description: form.description || undefined });
     setBusy(false);
     if (!res.ok) setError(res.error);
     else {

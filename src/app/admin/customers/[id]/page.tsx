@@ -21,8 +21,8 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
     include: {
       customerGroup: true,
       addresses: true,
-      referredBy: { select: { id: true, firstName: true, lastName: true } },
-      referrals: { select: { id: true, firstName: true, lastName: true, createdAt: true }, take: 20, orderBy: { createdAt: 'desc' } },
+      referredBy: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+      referrals: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, createdAt: true }, take: 20, orderBy: { createdAt: 'desc' } },
       sessions: { where: { revokedAt: null, expiresAt: { gt: new Date() } }, orderBy: { lastSeenAt: 'desc' } },
       orders: { orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, orderNumber: true, status: true, paymentStatus: true, totalToman: true, placedAt: true, isDemo: true } },
       reviews: { orderBy: { createdAt: 'desc' }, take: 10, select: { id: true, productId: true, rating: true, bodyFa: true, status: true, createdAt: true } },

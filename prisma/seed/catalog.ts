@@ -505,20 +505,28 @@ export async function seedCatalog(ctx: {
     }
 
     // media: poster (per product) + brand logo (per product, pointing at the brand's shared logo file)
-    await db.productMedia.createMany({
-      data: [
-        {
-          productId: product.id, kind: 'POSTER', sortOrder: 0,
-          path: `/media/posters/${def.slug}.webp`,
-          alt: `پوستر ${def.nameFa}`,
-        },
-        {
-          productId: product.id, kind: 'LOGO', sortOrder: 1,
-          path: `/media/brands/${def.brandSlug}.webp`,
-          alt: `لوگوی ${brandNameFa}`,
-        },
-      ],
-      skipDuplicates: true,
+    // Deterministic ids (not the default cuid()) so re-seeding upserts the
+    // same two rows instead of appending new ones every run — ProductMedia
+    // has no natural unique key to skipDuplicates against.
+    await db.productMedia.upsert({
+      where: { id: `seed-media-poster-${product.id}` },
+      update: { path: `/media/posters/${def.slug}.webp`, alt: `پوستر ${def.nameFa}` },
+      create: {
+        id: `seed-media-poster-${product.id}`,
+        productId: product.id, kind: 'POSTER', sortOrder: 0,
+        path: `/media/posters/${def.slug}.webp`,
+        alt: `پوستر ${def.nameFa}`,
+      },
+    });
+    await db.productMedia.upsert({
+      where: { id: `seed-media-logo-${product.id}` },
+      update: { path: `/media/brands/${def.brandSlug}.webp`, alt: `لوگوی ${brandNameFa}` },
+      create: {
+        id: `seed-media-logo-${product.id}`,
+        productId: product.id, kind: 'LOGO', sortOrder: 1,
+        path: `/media/brands/${def.brandSlug}.webp`,
+        alt: `لوگوی ${brandNameFa}`,
+      },
     });
     count('productMedia', 2);
 
@@ -593,7 +601,13 @@ export async function seedCatalog(ctx: {
   }
   ok(`${createdProductIds.size} محصول ایجاد شد`);
 
-  const allVariants = await db.productVariant.findMany({ select: { id: true, sku: true, productId: true, basePriceToman: true, costPriceToman: true } });
+  // orderBy keeps the "every Nth variant" selections below (stock alerts,
+  // price history) stable across re-runs, instead of drifting with whatever
+  // physical row order Postgres happens to return.
+  const allVariants = await db.productVariant.findMany({
+    select: { id: true, sku: true, productId: true, basePriceToman: true, costPriceToman: true },
+    orderBy: { sku: 'asc' },
+  });
   const variantBySku = new Map(allVariants.map((v) => [v.sku, v]));
   ok(`${allVariants.length} تنوع (variant) ایجاد شد`);
 
@@ -641,8 +655,11 @@ export async function seedCatalog(ctx: {
   for (const v of historyTargets) {
     const oldPrice = roundToman(Math.round(v.basePriceToman * 0.93), 'NEAREST', 1000);
     const oldCost = roundToman(Math.round(v.costPriceToman * 0.95), 'NEAREST', 100);
-    await db.priceHistory.create({
-      data: {
+    await db.priceHistory.upsert({
+      where: { id: `seed-price-history-${v.id}` },
+      update: {},
+      create: {
+        id: `seed-price-history-${v.id}`,
         variantId: v.id, oldPriceToman: oldPrice, newPriceToman: v.basePriceToman,
         oldCostToman: oldCost, newCostToman: v.costPriceToman,
         reason: 'به‌روزرسانی خودکار بر اساس نرخ ارز', source: 'RATE_UPDATE',

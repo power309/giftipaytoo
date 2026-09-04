@@ -22,10 +22,16 @@ export const PRODUCT_PAGE_SIZE = 40_000;
 
 function activeProductWhere(now: Date) {
   // Never list a DRAFT, ARCHIVED, or future-scheduled product.
+  //
+  // NOTE: this deliberately uses `expiresAt: { gt: now } OR null`, not
+  // `NOT: { expiresAt: { lte: now } }` — SQL's three-valued logic means
+  // `NOT (expires_at <= now)` evaluates to NULL (never true) for a row
+  // where `expires_at IS NULL`, silently excluding every product that has
+  // no expiry at all. Same reasoning applies to `publishAt` below.
   return {
     status: 'ACTIVE' as const,
     OR: [{ publishAt: null }, { publishAt: { lte: now } }],
-    NOT: { expiresAt: { lte: now } },
+    AND: [{ OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] }],
   };
 }
 

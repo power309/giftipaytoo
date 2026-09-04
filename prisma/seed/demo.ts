@@ -99,6 +99,7 @@ export async function seedDemoInventory() {
   step('موجودی نمونه (demo inventory codes — همه غیرواقعی و ساختگی‌اند)');
   const variants = await db.productVariant.findMany({
     select: { id: true, sku: true, costPriceToman: true, isActive: true },
+    orderBy: { sku: 'asc' }, // stable order → stable rng() draws → idempotent re-runs
   });
   let total = 0;
   for (const v of variants) {
@@ -167,6 +168,7 @@ export async function seedDemoOrders(
   const variants = await db.productVariant.findMany({
     where: { isActive: true },
     include: { product: { select: { slug: true, nameFa: true, media: { where: { kind: 'POSTER' }, take: 1 } } } },
+    orderBy: { sku: 'asc' }, // stable order → stable rng() draws → idempotent re-runs
   });
   if (variants.length === 0) {
     ok('هیچ تنوعی برای ساخت سفارش نمونه پیدا نشد — رد شد');
@@ -393,7 +395,7 @@ function reviewBody(): { rating: number; text: string } {
 
 export async function seedDemoReviews(customers: { id: string; email: string }[]) {
   step('نظرات نمونه (demo reviews)');
-  const products = await db.product.findMany({ where: { status: 'ACTIVE' }, select: { id: true, nameFa: true, isFeatured: true, isPopular: true } });
+  const products = await db.product.findMany({ where: { status: 'ACTIVE' }, select: { id: true, nameFa: true, isFeatured: true, isPopular: true }, orderBy: { slug: 'asc' } });
   if (products.length === 0) {
     ok('محصول فعالی برای نظر پیدا نشد — رد شد');
     return;

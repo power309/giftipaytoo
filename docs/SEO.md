@@ -110,9 +110,10 @@ crawler discovery works exactly the same as a real index would, without
 fighting the framework's file convention. This is the trade-off worth being
 explicit about: it costs nothing functionally, but a tool that specifically
 expects to fetch `/sitemap.xml` and see `<sitemapindex>` (some manual SEO
-audit checklists do) will instead see an empty `<urlset>` at that exact URL
-(`sitemap({ id: undefined })` returns `[]`) and needs to be pointed at
-`robots.txt` instead.
+audit checklists do) will instead get a **404** at that exact URL — Next's
+own generated route for a `generateSitemaps()`-based sitemap only exists at
+`/sitemap/<id>.xml`, not at the bare `/sitemap.xml` — and needs to be
+pointed at `robots.txt`'s `Sitemap:` lines instead.
 
 ## 5. The redirect mechanism and its trade-off
 

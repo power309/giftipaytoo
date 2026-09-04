@@ -17,6 +17,14 @@ async function pageRedirect(to: string): Promise<never> {
   return redirect(to);
 }
 
+/**
+ * `redirect()` works by throwing, but TypeScript does not treat
+ * `await someAsyncFnReturningNever()` as terminating a code path — so callers
+ * write `throw await redirectTo(...)`, which both reads honestly and lets the
+ * compiler narrow the branch away.
+ */
+const redirectTo = pageRedirect;
+
 /** Thrown by API routes when the caller lacks a required permission. */
 export class ForbiddenError extends Error {
   constructor(public readonly permission?: string) {
@@ -33,10 +41,12 @@ export class UnauthorizedError extends Error {
 }
 
 /** Requires a signed-in customer. Redirects to login in page contexts. */
-export async function requireUser(redirectTo?: string): Promise<SessionUser> {
+export async function requireUser(next?: string): Promise<SessionUser> {
   const user = await getSessionUser();
   if (!user) {
-    await pageRedirect(`/auth/login${redirectTo ? `?next=${encodeURIComponent(redirectTo)}` : ''}`);
+    throw await redirectTo(
+      `/auth/login${next ? `?next=${encodeURIComponent(next)}` : ''}`,
+    );
   }
   return user;
 }
@@ -44,13 +54,13 @@ export async function requireUser(redirectTo?: string): Promise<SessionUser> {
 /** Requires a staff member holding a specific permission. */
 export async function requirePermission(
   permission: PermissionKey,
-  redirectTo = '/admin',
+  next = '/admin',
 ): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) await pageRedirect(`/auth/login?next=${encodeURIComponent(redirectTo)}`);
-  if (!user.isStaff) await pageRedirect('/');
-  if (user.twoFactorEnabled && !user.twoFactorOk) await pageRedirect('/auth/2fa');
-  if (!user.permissions.includes(permission)) await pageRedirect('/admin/forbidden');
+  if (!user) throw await redirectTo(`/auth/login?next=${encodeURIComponent(next)}`);
+  if (!user.isStaff) throw await redirectTo('/');
+  if (user.twoFactorEnabled && !user.twoFactorOk) throw await redirectTo('/auth/2fa');
+  if (!user.permissions.includes(permission)) throw await redirectTo('/admin/forbidden');
   return user;
 }
 
@@ -77,8 +87,8 @@ export function can(user: SessionUser | null, permission: PermissionKey): boolea
 
 export async function requireStaff(): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) await pageRedirect('/auth/login?next=/admin');
-  if (!user.isStaff) await pageRedirect('/');
-  if (user.twoFactorEnabled && !user.twoFactorOk) await pageRedirect('/auth/2fa');
+  if (!user) throw await redirectTo('/auth/login?next=/admin');
+  if (!user.isStaff) throw await redirectTo('/');
+  if (user.twoFactorEnabled && !user.twoFactorOk) throw await redirectTo('/auth/2fa');
   return user;
 }

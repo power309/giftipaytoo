@@ -84,8 +84,9 @@ describe('structured-data: serializeJsonLd escaping', () => {
 
   it('JsonLd renders a script tag with the escaped payload', () => {
     const el = JsonLd({ data: { a: '<b>' } });
-    expect(el.props.type).toBe('application/ld+json');
-    expect(el.props.dangerouslySetInnerHTML.__html).toContain('\\u003cb\\u003e');
+    const props = el.props as { type: string; dangerouslySetInnerHTML: { __html: string } };
+    expect(props.type).toBe('application/ld+json');
+    expect(props.dangerouslySetInnerHTML.__html).toContain('\\u003cb\\u003e');
   });
 });
 
