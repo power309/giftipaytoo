@@ -1,40 +1,36 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { getSessionUser, readCartKey, getOrCreateCartKey } from '@/server/auth/session';
+import { getSessionUser, readCartKey, getOrCreateCartKey, clientIp } from '@/server/auth/session';
 import { assertCsrf, CsrfError } from '@/server/csrf';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
-import { clientIp } from '@/server/auth/session';
+import { addToCartSchema, removeCartItemSchema, quantitySchema, firstZodMessage } from '@/lib/schemas';
 import { SEAM, callSeam } from '@/app/(shop)/_lib/seams';
 import { fetchCart } from '@/app/(shop)/_lib/cart-data';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Line-item mutations. Every handler here is zod-validated, CSRF-checked and
- * rate-limited, and — critically — never accepts a price from the client.
- * The request bodies below carry `variantId` + `qty` (and a boolean
- * acknowledgement) only; the unit price is always resolved server-side by
- * `@/server/cart`'s own functions, never echoed back from the request.
+ * Line-item mutations. Every handler is zod-validated (shared vocabulary
+ * from `@/lib/schemas`), CSRF-checked and rate-limited, and — critically —
+ * never accepts a price from the client: the request bodies below only ever
+ * carry `variantId`/`cartItemId` + `qty` (+ a boolean acknowledgement). The
+ * unit price is always resolved server-side inside `@/server/cart`, never
+ * echoed back from the request body.
  */
 
-const addSchema = z.object({
-  variantId: z.string().min(1),
-  qty: z.number().int().min(1).max(999),
-});
-
-const patchSchema = z.object({
-  itemId: z.string().min(1),
-  qty: z.number().int().min(1).max(999).optional(),
-  regionAcknowledged: z.boolean().optional(),
-});
-
-const deleteSchema = z.object({
-  itemId: z.string().min(1),
-});
+const patchSchema = z
+  .object({
+    cartItemId: z.string().min(1, 'شناسه ردیف سبد خرید نامعتبر است.'),
+    qty: quantitySchema.optional(),
+    regionAcknowledged: z.boolean().optional(),
+  })
+  .refine((v) => v.qty !== undefined || v.regionAcknowledged !== undefined, {
+    message: 'هیچ تغییری ارسال نشده است.',
+  });
 
 async function identify() {
   const user = await getSessionUser();
-  return { userId: user?.id ?? null, isGuest: !user };
+  return { userId: user?.id ?? null };
 }
 
 function errorResponse(err: unknown) {
@@ -55,9 +51,9 @@ export async function POST(req: Request) {
     await enforceRateLimit('api.generic', userId ?? (await clientIp()));
 
     const body = await req.json().catch(() => null);
-    const parsed = addSchema.safeParse(body);
+    const parsed = addToCartSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ ok: false, error: 'تعداد یا کالای انتخابی نامعتبر است.' }, { status: 400 });
+      return NextResponse.json({ ok: false, error: firstZodMessage(parsed.error) }, { status: 400 });
     }
 
     const sessionKey = userId ? await readCartKey() : await getOrCreateCartKey();
@@ -66,10 +62,13 @@ export async function POST(req: Request) {
       SEAM.cart,
       async (mod) => {
         const addToCart = mod.addToCart as
-          | ((ctx: { userId: string | null; sessionKey: string | null }, input: { variantId: string; qty: number }) => Promise<unknown>)
+          | ((
+              ctx: { userId: string | null; sessionKey: string | null },
+              input: { variantId: string; qty: number; regionAcknowledged?: boolean },
+            ) => Promise<unknown>)
           | undefined;
         if (typeof addToCart !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
-        return addToCart({ userId, sessionKey }, { variantId: parsed.data.variantId, qty: parsed.data.qty });
+        return addToCart({ userId, sessionKey }, parsed.data);
       },
       { unavailableMessageFa: 'افزودن به سبد خرید هنوز فعال نشده است.' },
     );
@@ -96,10 +95,7 @@ export async function PATCH(req: Request) {
     const body = await req.json().catch(() => null);
     const parsed = patchSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ ok: false, error: 'مقدار وارد شده نامعتبر است.' }, { status: 400 });
-    }
-    if (parsed.data.qty === undefined && parsed.data.regionAcknowledged === undefined) {
-      return NextResponse.json({ ok: false, error: 'هیچ تغییری ارسال نشده است.' }, { status: 400 });
+      return NextResponse.json({ ok: false, error: firstZodMessage(parsed.error) }, { status: 400 });
     }
 
     const sessionKey = await readCartKey();
@@ -110,7 +106,7 @@ export async function PATCH(req: Request) {
         const updateQty = mod.updateQty as
           | ((
               ctx: { userId: string | null; sessionKey: string | null },
-              input: { itemId: string; qty?: number; regionAcknowledged?: boolean },
+              input: { cartItemId: string; qty?: number; regionAcknowledged?: boolean },
             ) => Promise<unknown>)
           | undefined;
         if (typeof updateQty !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
@@ -139,9 +135,9 @@ export async function DELETE(req: Request) {
     await enforceRateLimit('api.generic', userId ?? (await clientIp()));
 
     const body = await req.json().catch(() => null);
-    const parsed = deleteSchema.safeParse(body);
+    const parsed = removeCartItemSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ ok: false, error: 'کالای انتخابی نامعتبر است.' }, { status: 400 });
+      return NextResponse.json({ ok: false, error: firstZodMessage(parsed.error) }, { status: 400 });
     }
 
     const sessionKey = await readCartKey();
@@ -150,7 +146,10 @@ export async function DELETE(req: Request) {
       SEAM.cart,
       async (mod) => {
         const removeItem = mod.removeItem as
-          | ((ctx: { userId: string | null; sessionKey: string | null }, input: { itemId: string }) => Promise<unknown>)
+          | ((
+              ctx: { userId: string | null; sessionKey: string | null },
+              input: { cartItemId: string },
+            ) => Promise<unknown>)
           | undefined;
         if (typeof removeItem !== 'function') throw new Error('ماژول سبد خرید کامل نیست.');
         return removeItem({ userId, sessionKey }, parsed.data);

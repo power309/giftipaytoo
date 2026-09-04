@@ -51,7 +51,7 @@ function fallbackUnitPrice(variant: { basePriceToman: number; salePriceToman: nu
   return variant.salePriceToman ?? variant.basePriceToman;
 }
 
-async function resolveUnitPrice(
+export async function resolveUnitPrice(
   variant: { id: string; basePriceToman: number; salePriceToman: number | null },
   qty: number,
 ): Promise<number> {
@@ -95,7 +95,7 @@ async function availabilityFallback(variantIds: string[]): Promise<Record<string
   return out;
 }
 
-async function availabilityFor(variantIds: string[]): Promise<Record<string, number>> {
+export async function availabilityFor(variantIds: string[]): Promise<Record<string, number>> {
   const mod = await loadInventoryReservation();
   if (mod && typeof mod.availabilityMap === 'function') {
     try {

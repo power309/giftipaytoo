@@ -78,7 +78,7 @@ export const ZARINPAL_STATUS_MESSAGES: Record<number, string> = {
   [-54]: 'این authority نامعتبر یا بایگانی‌شده است.',
 };
 
-function messageFor(code: number): string {
+export function messageFor(code: number): string {
   return ZARINPAL_STATUS_MESSAGES[code] ?? `خطای نامشخص درگاه پرداخت زرین‌پال (کد ${code}).`;
 }
 

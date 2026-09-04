@@ -169,7 +169,7 @@ export async function reconcileStockHandler(): Promise<void> {
 export interface NewsletterSendPayload {
   userIds: string[];
   template: string;
-  data?: Record<string, unknown>;
+  data?: Record<string, string | number | boolean | null | undefined>;
 }
 
 export async function newsletterSendHandler(payload: unknown): Promise<void> {

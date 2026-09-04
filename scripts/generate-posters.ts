@@ -38,7 +38,7 @@ import {
   type PosterGlyph,
   type PosterSpec,
 } from '../src/lib/poster.js';
-import { slugify, toPersianDigits } from '../src/lib/persian.js';
+import { toPersianDigits } from '../src/lib/persian.js';
 
 // ── Paths ────────────────────────────────────────────────────────────────
 
@@ -510,7 +510,10 @@ async function generateBanners(prisma: PrismaClient, cli: Cli, summary: Summary)
     return;
   }
   await runPool(banners, cli.concurrency, async (b) => {
-    const name = slugify(b.titleFa) || b.id;
+    // Banner has no dedicated slug column, and titleFa is Persian — slugify()
+    // deliberately keeps Persian letters (fine for URL routes) but that is
+    // not safe as a filesystem/CDN asset filename, so fall back to the id.
+    const name = `banner-${b.id}`;
     const accent = b.bgColor ?? '#5b3df5';
     const desktopPath = b.imageDesktop || `/media/banners/${name}-desktop.webp`;
     const mobilePath = b.imageMobile || `/media/banners/${name}-mobile.webp`;

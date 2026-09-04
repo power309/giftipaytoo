@@ -116,16 +116,19 @@ export type GatewayDTO = {
 
 // ── Checkout submission ──────────────────────────────────────────────────
 
-export type ContactInput =
-  | { mode: 'account' }
-  | { mode: 'guest'; email?: string; mobile?: string };
-
+/**
+ * Mirrors `checkoutInputSchema` from `@/lib/schemas` (the shared validation
+ * vocabulary every agent's checkout-adjacent code is expected to use) plus
+ * `otpCode`, which is specific to the risk-verification retry and has no
+ * shared schema of its own — validated ad hoc against `otpSchema` where used.
+ * `guestContact` absent = paying with the signed-in account.
+ */
 export type SubmitOrderInput = {
-  contact: ContactInput;
+  termsAccepted: true;
+  regionAcknowledged: boolean;
   useWallet: boolean;
-  gatewayKey: string;
-  termsAccepted: boolean;
-  regionAckAll: boolean;
+  guestContact?: { email?: string; mobile?: string };
+  gatewayKey?: 'zarinpal' | 'wallet' | 'manual';
   otpCode?: string;
 };
 

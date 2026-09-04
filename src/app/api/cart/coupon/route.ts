@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { getSessionUser, readCartKey, clientIp } from '@/server/auth/session';
 import { assertCsrf, CsrfError } from '@/server/csrf';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
+import { applyCouponSchema, firstZodMessage } from '@/lib/schemas';
 import { SEAM, callSeam } from '@/app/(shop)/_lib/seams';
 import { fetchCart, couponFailureMessage } from '@/app/(shop)/_lib/cart-data';
 
 export const dynamic = 'force-dynamic';
-
-const applySchema = z.object({ code: z.string().trim().min(1).max(64) });
 
 function errorResponse(err: unknown) {
   if (err instanceof CsrfError) return NextResponse.json({ ok: false, error: err.message }, { status: 403 });
@@ -29,9 +27,9 @@ export async function POST(req: Request) {
     await enforceRateLimit('coupon.apply', user?.id ?? (await clientIp()));
 
     const body = await req.json().catch(() => null);
-    const parsed = applySchema.safeParse(body);
+    const parsed = applyCouponSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ ok: false, error: 'کد تخفیف را وارد کنید.' }, { status: 400 });
+      return NextResponse.json({ ok: false, error: firstZodMessage(parsed.error) }, { status: 400 });
     }
 
     const sessionKey = await readCartKey();

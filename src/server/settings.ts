@@ -2,9 +2,20 @@ import 'server-only';
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import { db } from './db';
-import { assertPermission } from './auth/guard';
 import { audit } from './audit';
 import { logger } from '@/lib/logger';
+
+// `assertPermission` (src/server/auth/guard.ts) transitively imports
+// `next/navigation` / `next/headers`, which only work inside an actual
+// Next.js request. Read paths here (`getSetting`, `getSettings`,
+// `getPublicSettings`) are also called from the standalone worker process
+// and job handlers, which must never load that chain — so it's imported
+// lazily, only inside `setSetting`, which is only ever called from an
+// admin server action running inside a real Next.js request.
+async function assertSettingManagePermission() {
+  const { assertPermission } = await import('./auth/guard');
+  return assertPermission('setting.manage');
+}
 
 /**
  * Typed, cached access over the `Setting` table.
@@ -394,7 +405,7 @@ export async function setSetting(
   value: unknown,
   opts: SetSettingOptions = {},
 ): Promise<{ key: string; value: unknown; group: string }> {
-  const user = await assertPermission('setting.manage');
+  const user = await assertSettingManagePermission();
 
   const def = schemaFor(key);
   if (!def) {

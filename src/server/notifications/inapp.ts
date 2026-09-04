@@ -1,5 +1,5 @@
 import 'server-only';
-import type { NotificationStatus } from '@prisma/client';
+import type { NotificationStatus, Prisma } from '@prisma/client';
 import { db } from '../db';
 
 /**
@@ -27,7 +27,7 @@ export async function writeInAppNotification(input: WriteInAppNotificationInput)
       title: input.title,
       body: input.body,
       href: input.href ?? null,
-      payload: input.payload ?? undefined,
+      payload: (input.payload as Prisma.InputJsonValue) ?? undefined,
       status: input.status ?? 'SENT',
       sentAt: (input.status ?? 'SENT') === 'SENT' ? new Date() : null,
     },

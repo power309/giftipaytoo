@@ -69,6 +69,15 @@ fi
 # only this redacted form is used in log output.
 REDACTED_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's#(//[^:/@]+):[^@]*@#\1:***@#')"
 
+# Prisma's DATABASE_URL commonly carries a `?schema=...` query parameter that
+# libpq's own URI parser does not recognize as a connection option (pg_dump
+# would fail with "invalid URI query parameter"). Pull it out as an explicit
+# --schema flag instead, and strip the query string from the URL we hand to
+# pg_dump.
+PG_SCHEMA="$(printf '%s' "$DATABASE_URL" | grep -oE '[?&]schema=[^&]*' | head -n1 | sed -E 's/^[?&]schema=//')"
+PG_SCHEMA="${PG_SCHEMA:-public}"
+CONN_URL="${DATABASE_URL%%\?*}"
+
 mkdir -p "$BACKUP_DIR"
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -79,10 +88,10 @@ echo "شروع پشتیبان‌گیری از پایگاه‌داده: ${REDACTE
 echo "فایل خروجی: ${OUTPATH}"
 
 if $DRY_RUN; then
-  echo "[dry-run] pg_dump --dbname=<DATABASE_URL> --format=custom --no-owner --no-privileges | gzip > ${OUTPATH}"
+  echo "[dry-run] pg_dump --dbname=<DATABASE_URL> --schema=${PG_SCHEMA} --format=custom --no-owner --no-privileges | gzip > ${OUTPATH}"
 else
   set +e
-  pg_dump --dbname="$DATABASE_URL" --format=custom --no-owner --no-privileges | gzip > "$OUTPATH"
+  pg_dump --dbname="$CONN_URL" --schema="$PG_SCHEMA" --format=custom --no-owner --no-privileges | gzip > "$OUTPATH"
   STATUS=$?
   set -e
   if [[ $STATUS -ne 0 ]]; then

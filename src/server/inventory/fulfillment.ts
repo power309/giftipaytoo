@@ -29,6 +29,15 @@ class SupplierRetryableError extends Error {
   }
 }
 
+async function resolveJobAttempt(idempotencyKey: string): Promise<number> {
+  try {
+    const row = await db.jobQueue.findUnique({ where: { idempotencyKey }, select: { attempts: true } });
+    return row?.attempts ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Fulfills a paid order. This is the handler behind the `fulfill-order` job
  * (payload `{ orderId }`, idempotencyKey `fulfill:<orderId>` at enqueue
@@ -52,7 +61,12 @@ export async function fulfillOrder(
   orderId: string,
   opts: { attempt?: number; maxSupplierAttempts?: number } = {},
 ): Promise<FulfillResult> {
-  const attempt = opts.attempt ?? 0;
+  // The job queue runner invokes handlers as `handler(job.payload)` — it
+  // does not pass attempt/idempotency metadata into the call. Since this
+  // job is always enqueued with idempotencyKey `fulfill:<orderId>`, we can
+  // recover "how many times has this already run" from that row when the
+  // caller (tests, mainly) hasn't passed `opts.attempt` explicitly.
+  const attempt = opts.attempt ?? (await resolveJobAttempt(`fulfill:${orderId}`));
   const maxSupplierAttempts = opts.maxSupplierAttempts ?? DEFAULT_MAX_SUPPLIER_ATTEMPTS;
 
   const txResult = await db.$transaction(
@@ -220,13 +234,15 @@ export async function fulfillOrder(
         await tx.order.update({ where: { id: orderId }, data: { needsReview: true } });
       }
 
-      const wasFulfilled = order.fulfillmentStatus === 'FULFILLED';
+      // Note: `order.fulfillmentStatus` can never be 'FULFILLED' here — the
+      // guard above already returned 'already-fulfilled' for that case — so
+      // `summary.fulfillmentStatus === 'FULFILLED'` below is exactly "became
+      // fulfilled during this run" without needing a separate before/after flag.
       const summary = await recomputeOrderFulfillment(tx, orderId);
 
       return {
         kind: 'processed' as const,
         summary,
-        wasFulfilled,
         userId: order.userId,
         manualReviewNeeded,
         pendingSupplierRetry,
@@ -240,9 +256,9 @@ export async function fulfillOrder(
   if (txResult.kind === 'not-paid') return { ok: false, reason: 'not-paid' };
   if (txResult.kind === 'already-fulfilled') return { ok: true, alreadyFulfilled: true, delivered: 0 };
 
-  const { summary, wasFulfilled, userId, manualReviewNeeded, pendingSupplierRetry, deliveredThisRun } = txResult;
+  const { summary, userId, manualReviewNeeded, pendingSupplierRetry, deliveredThisRun } = txResult;
 
-  if (summary.fulfillmentStatus === 'FULFILLED' && !wasFulfilled) {
+  if (summary.fulfillmentStatus === 'FULFILLED') {
     await enqueueJob(
       db,
       'notify',

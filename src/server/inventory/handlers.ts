@@ -5,40 +5,62 @@ import { inventoryImportJobHandler } from './import';
 import { lowStockScanHandler } from './reconcile';
 
 /**
- * Minimal shape the job queue runner (owned by another agent) gives every
- * handler. It is intentionally loose — the runner's actual `JobQueue` row
- * type may carry more fields.
+ * Job handlers, keyed by `JobQueue.type`. Wired up by
+ * `src/server/jobs/registry.ts` (owned by the jobs agent), which imports
+ * this module dynamically and looks up a same-named export for each of
+ * `'fulfill-order' | 'release-reservation' | 'inventory-import' |
+ * 'low-stock-scan'` — hence the string-literal export names below (valid
+ * ES2022 "arbitrary module namespace identifiers", matching this repo's
+ * `tsconfig.json` target).
+ *
+ * The worker calls a handler as `handler(job.payload)` — payload only, no
+ * wrapping job row — and treats a thrown error as "job failed, retry with
+ * backoff" (`src/server/jobs/queue.ts`'s `fail()`), so every handler below
+ * simply awaits its real work and lets exceptions propagate.
+ *
+ * Payload shapes:
+ *   fulfill-order        { orderId: string }
+ *   release-reservation  { orderId: string; actorId?: string | null }
+ *                         (payload with no orderId → bulk expiry sweep)
+ *   inventory-import     see `InventoryImportJobPayload` in ./import.ts
+ *   low-stock-scan       (no payload)
  */
-export type JobQueueRow = {
-  id: string;
-  type: string;
-  payload: unknown;
-  attempts: number;
+
+async function fulfillOrderHandler(payload: unknown): Promise<void> {
+  const { orderId } = payload as { orderId: string };
+  await fulfillOrder(orderId);
+}
+
+async function releaseReservationHandler(payload: unknown): Promise<void> {
+  const p = (payload as { orderId?: string; actorId?: string | null } | null) ?? {};
+  if (p.orderId) {
+    await releaseReservation(p.orderId, { actorId: p.actorId ?? null });
+    return;
+  }
+  await releaseExpiredReservations();
+}
+
+async function inventoryImportHandler(payload: unknown): Promise<void> {
+  await inventoryImportJobHandler({ payload });
+}
+
+async function lowStockScanJobHandler(): Promise<void> {
+  await lowStockScanHandler();
+}
+
+export {
+  fulfillOrderHandler as 'fulfill-order',
+  releaseReservationHandler as 'release-reservation',
+  inventoryImportHandler as 'inventory-import',
+  lowStockScanJobHandler as 'low-stock-scan',
 };
 
-/**
- * Map from `JobQueue.type` to the function that processes it. The queue
- * runner wires this up directly — see docs/INVENTORY.md for the payload
- * shape each job type expects.
- */
+/** Same handlers, keyed by job type — convenient for direct/test invocation. */
 export const inventoryJobHandlers = {
-  'fulfill-order': async (job: JobQueueRow) => {
-    const payload = job.payload as { orderId: string };
-    return fulfillOrder(payload.orderId, { attempt: job.attempts });
-  },
-
-  'release-reservation': async (job: JobQueueRow) => {
-    const payload = (job.payload as { orderId?: string; actorId?: string | null }) ?? {};
-    if (payload.orderId) {
-      return releaseReservation(payload.orderId, { actorId: payload.actorId ?? null });
-    }
-    // No orderId in the payload — treat as the bulk expiry sweep.
-    return releaseExpiredReservations();
-  },
-
-  'inventory-import': async (job: JobQueueRow) => inventoryImportJobHandler(job),
-
-  'low-stock-scan': async () => lowStockScanHandler(),
+  'fulfill-order': fulfillOrderHandler,
+  'release-reservation': releaseReservationHandler,
+  'inventory-import': inventoryImportHandler,
+  'low-stock-scan': lowStockScanJobHandler,
 } as const;
 
 export type InventoryJobType = keyof typeof inventoryJobHandlers;

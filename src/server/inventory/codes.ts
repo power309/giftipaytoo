@@ -1,5 +1,5 @@
 import 'server-only';
-import type { ActorType, InventoryStatus, Prisma } from '@prisma/client';
+import type { InventoryStatus, Prisma } from '@prisma/client';
 import { db } from '@/server/db';
 import { encryptSecret, decryptSecret, fingerprintCode, maskCode } from '@/lib/crypto';
 import { assertPermission, assertUser, ForbiddenError, UnauthorizedError } from '@/server/auth/guard';
@@ -158,7 +158,13 @@ export async function addCodesBulk(
 // revealCode — the ONLY path that returns a full plaintext code
 // ─────────────────────────────────────────────────────────────
 
-export type RevealActorType = Extract<ActorType, 'STAFF' | 'CUSTOMER'>;
+/**
+ * Who is revealing the code. This is a domain concept distinct from
+ * Prisma's `ActorType` (which has no `CUSTOMER` value — the closest match
+ * for a signed-in shopper there is `USER`), so it is its own literal union;
+ * `revealCode` maps it to a valid `ActorType` when writing the audit row.
+ */
+export type RevealActorType = 'STAFF' | 'CUSTOMER';
 
 export type RevealCodeInput = {
   itemId: string;
@@ -232,7 +238,7 @@ export async function revealCode(input: RevealCodeInput): Promise<RevealCodeResu
       itemId: item.id,
       action: 'REVEALED',
       actorId: input.actorId,
-      actorType: input.actorType,
+      actorType: input.actorType === 'STAFF' ? 'STAFF' : 'USER',
       ip: input.ip ?? null,
       meta: { reason: input.reason ?? null },
     },

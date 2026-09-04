@@ -85,6 +85,11 @@ fi
 # only this redacted form is used in log output.
 REDACTED_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's#(//[^:/@]+):[^@]*@#\1:***@#')"
 
+# Strip a Prisma-style `?schema=...` query param — libpq's URI parser
+# rejects it as an unknown connection option. The dump already carries its
+# own schema (recorded by scripts/backup.sh at dump time via --schema).
+CONN_URL="${DATABASE_URL%%\?*}"
+
 echo "=============================================================="
 echo "  هشدار جدی: این عملیات پایگاه‌داده مقصد را کامل بازنویسی می‌کند"
 echo "  مقصد : ${REDACTED_URL}"
@@ -107,7 +112,7 @@ fi
 
 echo "در حال بازگردانی..."
 set +e
-gunzip -c "$FILE" | pg_restore --dbname="$DATABASE_URL" --clean --if-exists --no-owner --no-privileges
+gunzip -c "$FILE" | pg_restore --dbname="$CONN_URL" --clean --if-exists --no-owner --no-privileges
 STATUS=$?
 set -e
 
