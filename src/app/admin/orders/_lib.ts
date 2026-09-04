@@ -111,6 +111,11 @@ export function buildOrdersWhere(sp: SearchParams): Prisma.OrderWhereInput {
   return where;
 }
 
+/** Shared server-action result shape for the order detail page's mutations. */
+export type ActionResult<T = undefined> =
+  | { ok: true; message?: string; data?: T }
+  | { ok: false; error: string };
+
 export const ORDER_LIST_SELECT = {
   id: true,
   orderNumber: true,

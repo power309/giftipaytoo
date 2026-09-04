@@ -22,9 +22,12 @@ import {
  * `userId`). Every write recomputes price/availability from the database;
  * nothing here ever trusts a client-supplied price or quantity.
  *
- * Lazy-import seams (see report): `@/server/pricing-service` for live
- * pricing and `@/server/inventory/reservation` for live availability. Both
- * degrade honestly — documented fallbacks below — until those agents land.
+ * Lazy-import seam: `@/server/pricing-service`'s `computeVariantPrice` for
+ * live, DB-backed pricing (margin rules, campaigns, customer-group and bulk
+ * discounts, exchange-rate driven cost). Degrades honestly to
+ * `variant.salePriceToman ?? basePriceToman` if that module is ever
+ * unavailable. `@/server/inventory/reservation`'s `availabilityMap` is used
+ * the same way for live stock counts.
  */
 
 const CART_EXPIRY_DAYS = 30;
@@ -32,10 +35,10 @@ const CART_EXPIRY_DAYS = 30;
 // ── Lazy seams ──────────────────────────────────────────────────
 
 type PricingServiceModule = {
-  getEffectivePrice?: (
-    variant: { id: string; basePriceToman: number; salePriceToman: number | null },
-    opts: { qty: number },
-  ) => Promise<{ unitPriceToman: number } | null>;
+  computeVariantPrice?: (
+    variantId: string,
+    opts: { customerGroupId?: string | null; qty?: number },
+  ) => Promise<{ unitPriceToman: number }>;
 };
 
 async function loadPricingService(): Promise<PricingServiceModule | null> {
@@ -54,14 +57,15 @@ function fallbackUnitPrice(variant: { basePriceToman: number; salePriceToman: nu
 export async function resolveUnitPrice(
   variant: { id: string; basePriceToman: number; salePriceToman: number | null },
   qty: number,
+  customerGroupId?: string | null,
 ): Promise<number> {
   const mod = await loadPricingService();
-  if (mod && typeof mod.getEffectivePrice === 'function') {
+  if (mod && typeof mod.computeVariantPrice === 'function') {
     try {
-      const res = await mod.getEffectivePrice(variant, { qty });
-      if (res && Number.isInteger(res.unitPriceToman) && res.unitPriceToman > 0) return res.unitPriceToman;
+      const quote = await mod.computeVariantPrice(variant.id, { customerGroupId, qty });
+      if (quote && Number.isInteger(quote.unitPriceToman) && quote.unitPriceToman > 0) return quote.unitPriceToman;
     } catch (err) {
-      logger.warn('cart: pricing-service.getEffectivePrice failed, using fallback price', {
+      logger.warn('cart: pricing-service.computeVariantPrice failed, using fallback price', {
         variantId: variant.id,
         err: err instanceof Error ? err.message : String(err),
       });
@@ -258,6 +262,8 @@ export type CartView = {
 };
 
 async function hydrate(resolved: ResolvedCart, opts: { useWallet?: boolean } = {}): Promise<CartView> {
+  const user = await getSessionUser();
+
   const items = await db.cartItem.findMany({
     where: { cartId: resolved.cartId },
     include: {
@@ -276,7 +282,7 @@ async function hydrate(resolved: ResolvedCart, opts: { useWallet?: boolean } = {
   for (const item of items) {
     const variant = item.variant;
     const product = variant.product;
-    const unitPriceToman = await resolveUnitPrice(variant, item.qty);
+    const unitPriceToman = await resolveUnitPrice(variant, item.qty, user?.customerGroupId);
     const priceChanged = unitPriceToman !== item.unitPriceToman;
     if (priceChanged) {
       await db.cartItem.update({ where: { id: item.id }, data: { unitPriceToman } });
@@ -328,7 +334,6 @@ async function hydrate(resolved: ResolvedCart, opts: { useWallet?: boolean } = {
       });
       const bySupplier = new Map(supplierRows.map((v) => [v.id, v.supplierId]));
 
-      const user = await getSessionUser();
       const evalResult = await evaluateCoupon(coupon, {
         subtotalToman,
         userId: resolved.userId,
@@ -355,7 +360,6 @@ async function hydrate(resolved: ResolvedCart, opts: { useWallet?: boolean } = {
     getSetting<number>('checkout.feeToman', 0),
   ]);
 
-  const user = resolved.userId ? await getSessionUser() : null;
   const totals = computeTotals({
     lines: lines.map((l) => ({ variantId: l.variantId, qty: l.qty, unitPriceToman: l.unitPriceToman, unitCostToman: 0 })),
     coupon: couponForTotals,
@@ -428,7 +432,8 @@ export async function addToCart(input: FormData | Record<string, unknown>): Prom
   }
 
   // Price is ALWAYS recomputed server-side — never trust a client price.
-  const unitPriceToman = await resolveUnitPrice(variant, finalQty);
+  const cartUser = await getSessionUser();
+  const unitPriceToman = await resolveUnitPrice(variant, finalQty, cartUser?.customerGroupId);
   assertToman(unitPriceToman, 'قیمت واحد');
 
   await db.cartItem.upsert({
@@ -474,7 +479,8 @@ export async function updateQty(input: FormData | Record<string, unknown>): Prom
     return { ok: false, error: 'موجودی کافی برای این تعداد وجود ندارد.' };
   }
 
-  const unitPriceToman = await resolveUnitPrice(item.variant, qty);
+  const qtyUser = await getSessionUser();
+  const unitPriceToman = await resolveUnitPrice(item.variant, qty, qtyUser?.customerGroupId);
   await db.cartItem.update({ where: { id: item.id }, data: { qty, unitPriceToman } });
 
   return hydrate(resolved);

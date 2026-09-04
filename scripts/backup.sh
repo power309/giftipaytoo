@@ -69,13 +69,14 @@ fi
 # only this redacted form is used in log output.
 REDACTED_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's#(//[^:/@]+):[^@]*@#\1:***@#')"
 
-# Prisma's DATABASE_URL commonly carries a `?schema=...` query parameter that
-# libpq's own URI parser does not recognize as a connection option (pg_dump
-# would fail with "invalid URI query parameter"). Pull it out as an explicit
-# --schema flag instead, and strip the query string from the URL we hand to
-# pg_dump.
-PG_SCHEMA="$(printf '%s' "$DATABASE_URL" | grep -oE '[?&]schema=[^&]*' | head -n1 | sed -E 's/^[?&]schema=//')"
-PG_SCHEMA="${PG_SCHEMA:-public}"
+# Prisma's DATABASE_URL commonly carries a `?schema=...` query parameter
+# that libpq's own URI parser rejects as an unknown connection option
+# ("invalid URI query parameter"). Strip the query string before handing the
+# URL to pg_dump. Deliberately dump the WHOLE database (no `--schema`/`-n`
+# filter) rather than just Prisma's target schema: pg_dump silently omits
+# extensions (e.g. pg_trgm, used by the trigram search indexes) whenever a
+# schema filter is applied, which breaks restore for anything depending on
+# one. A full-database dump is what an actual disaster-recovery restore needs.
 CONN_URL="${DATABASE_URL%%\?*}"
 
 mkdir -p "$BACKUP_DIR"
@@ -88,10 +89,10 @@ echo "شروع پشتیبان‌گیری از پایگاه‌داده: ${REDACTE
 echo "فایل خروجی: ${OUTPATH}"
 
 if $DRY_RUN; then
-  echo "[dry-run] pg_dump --dbname=<DATABASE_URL> --schema=${PG_SCHEMA} --format=custom --no-owner --no-privileges | gzip > ${OUTPATH}"
+  echo "[dry-run] pg_dump --dbname=<DATABASE_URL> --format=custom --no-owner --no-privileges | gzip > ${OUTPATH}"
 else
   set +e
-  pg_dump --dbname="$CONN_URL" --schema="$PG_SCHEMA" --format=custom --no-owner --no-privileges | gzip > "$OUTPATH"
+  pg_dump --dbname="$CONN_URL" --format=custom --no-owner --no-privileges | gzip > "$OUTPATH"
   STATUS=$?
   set -e
   if [[ $STATUS -ne 0 ]]; then

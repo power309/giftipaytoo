@@ -4,6 +4,7 @@ import { db } from '@/server/db';
 import { requirePermission } from '@/server/auth/guard';
 import { PageHeader, Money, StatusPill, DemoBadge } from '@/components/admin/kit';
 import { DataTable, type Column } from '@/components/admin/data-table';
+import { OrderExtraFilters } from '@/components/admin/orders/extra-filters';
 import { formatJalali, toPersianDigits } from '@/lib/persian';
 import { parseListQuery, type SearchParams } from '@/lib/admin-query';
 import {
@@ -109,13 +110,22 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
           },
         ]}
         toolbar={
-          <Link
-            href="/admin/reviews-queue"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-warn/30 bg-warn-soft px-3 text-xs font-medium text-warn hover:brightness-95"
-          >
-            <AlertTriangle className="size-3.5" aria-hidden />
-            صف بررسی ریسک
-          </Link>
+          <>
+            <OrderExtraFilters />
+            <a
+              href={`/api/admin/orders/export?${qs.toString()}${qs.toString() ? '&' : ''}format=xlsx`}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border-base bg-surface-muted px-3 text-xs font-medium text-fg hover:bg-border-base"
+            >
+              خروجی اکسل
+            </a>
+            <Link
+              href="/admin/reviews-queue"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-warn/30 bg-warn-soft px-3 text-xs font-medium text-warn hover:brightness-95"
+            >
+              <AlertTriangle className="size-3.5" aria-hidden />
+              صف بررسی ریسک
+            </Link>
+          </>
         }
       />
     </div>

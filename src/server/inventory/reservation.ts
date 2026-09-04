@@ -136,6 +136,24 @@ export async function reserveForOrder(params: {
   }
 }
 
+/**
+ * Adapter matching the exact optional shape `src/server/orders.ts`'s
+ * checkout flow dynamically imports and duck-types
+ * (`InventoryReservationModule`) — kept as a thin wrapper around
+ * `reserveForOrder` so that module can prefer this race-safe implementation
+ * over its own hand-rolled `SKIP LOCKED` fallback, without either module
+ * taking a hard compile-time dependency on the other.
+ */
+export async function reserveInventory(opts: {
+  orderId: string;
+  lines: { variantId: string; qty: number }[];
+  minutes: number;
+}): Promise<{ ok: boolean; shortage?: { variantId: string; available: number }[] }> {
+  const result = await reserveForOrder(opts);
+  if (result.ok) return { ok: true };
+  return { ok: false, shortage: result.shortages.map((s) => ({ variantId: s.variantId, available: s.available })) };
+}
+
 /** Returns every item reserved for an order back to AVAILABLE. Idempotent. */
 export async function releaseReservation(
   orderId: string,
