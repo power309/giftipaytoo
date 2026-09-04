@@ -44,6 +44,7 @@ export function CheckoutClient({
   gateways,
   gatewaysUnavailable,
   guestCheckoutEnabled,
+  walletCheckoutEnabled,
   isSignedIn,
   userContact,
   submitOrder,
@@ -54,6 +55,7 @@ export function CheckoutClient({
   gateways: GatewayDTO[];
   gatewaysUnavailable: boolean;
   guestCheckoutEnabled: boolean;
+  walletCheckoutEnabled: boolean;
   isSignedIn: boolean;
   userContact: UserContact;
   submitOrder: (input: SubmitOrderInput) => Promise<SubmitOrderResult>;
@@ -105,7 +107,7 @@ export function CheckoutClient({
     if (isGuest && useWallet) setUseWallet(false);
   }, [isGuest, useWallet]);
 
-  const cart = withWalletApplied(initialCart, useWallet && !isGuest);
+  const cart = withWalletApplied(initialCart, useWallet && !isGuest && walletCheckoutEnabled);
   const hasBlockingIssues = initialCart.blockingIssues.length > 0;
   const regionRestrictedLines = cart.lines.filter((l) => l.requiresRegionAck);
   const needsRegionAck = regionRestrictedLines.length > 0;
@@ -169,7 +171,7 @@ export function CheckoutClient({
     const input: SubmitOrderInput = {
       termsAccepted: true,
       regionAcknowledged: regionAckAll,
-      useWallet: useWallet && !isGuest,
+      useWallet: useWallet && !isGuest && walletCheckoutEnabled,
       gatewayKey: gatewayKey as SubmitOrderInput['gatewayKey'],
       ...(contactMode === 'guest' ? { guestContact: { email: guestEmail.trim() || undefined, mobile: guestMobile.trim() || undefined } } : {}),
     };
@@ -336,7 +338,7 @@ export function CheckoutClient({
             coupon={cart.coupon}
             quoteExpiresAt={cart.quoteExpiresAt}
             isStale={cart.isStale}
-            walletEligible={!isGuest && cart.totals.walletBalanceToman > 0}
+            walletEligible={walletCheckoutEnabled && !isGuest && cart.totals.walletBalanceToman > 0}
             onToggleWallet={setUseWallet}
           />
         </div>

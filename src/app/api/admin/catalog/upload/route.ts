@@ -144,10 +144,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Server-generated random filename — the client's filename is never
-  // used for the path, only kept (truncated) for the audit trail.
+  // used for the path, only kept (truncated) for the audit trail. Every
+  // upload physically lands under public/media/uploads/YYYY/MM/ regardless
+  // of its logical `folder` tag (that tag is metadata only, used by the
+  // media library's filter — it never becomes a path segment).
   const { yyyy, mm } = todayFolder();
   const randomName = crypto.randomBytes(16).toString('hex');
-  const relDir = path.posix.join('media', folder === 'uploads' ? 'uploads' : folder, folder === 'uploads' ? yyyy : '', folder === 'uploads' ? mm : '');
+  const relDir = path.posix.join('media', 'uploads', yyyy, mm);
   const relPath = path.posix.join(relDir, `${randomName}.webp`);
   const publicPath = `/${relPath}`;
 
@@ -177,6 +180,7 @@ export async function POST(req: NextRequest) {
     summary: `بارگذاری تصویر در ${publicPath}`,
     after: {
       path: publicPath,
+      folder,
       width: outWidth,
       height: outHeight,
       bytes: outputBuffer.length,

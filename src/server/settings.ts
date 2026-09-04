@@ -175,6 +175,74 @@ export const SETTINGS_SCHEMA = {
     default: 60,
     labelFa: 'بازه زمانی بررسی ریسک (دقیقه)',
   },
+  'risk.guestThresholdToman': {
+    group: 'risk',
+    type: 'number',
+    default: 5_000_000,
+    labelFa: 'سقف سفارش مهمان بدون تأیید (تومان)',
+  },
+  'risk.highDenomToman': {
+    group: 'risk',
+    type: 'number',
+    default: 3_000_000,
+    labelFa: 'آستانه «کالای گران‌قیمت» در هر ردیف (تومان)',
+  },
+  'risk.highDenomLineCount': {
+    group: 'risk',
+    type: 'number',
+    default: 3,
+    labelFa: 'تعداد ردیف گران‌قیمت که سفارش را پرریسک می‌کند',
+  },
+  'risk.failedPaymentThreshold': {
+    group: 'risk',
+    type: 'number',
+    default: 3,
+    labelFa: 'تعداد پرداخت ناموفق از یک IP',
+  },
+  'risk.failedPaymentWindowMinutes': {
+    group: 'risk',
+    type: 'number',
+    default: 60,
+    labelFa: 'بازه شمارش پرداخت‌های ناموفق (دقیقه)',
+  },
+  'risk.newAccountHours': {
+    group: 'risk',
+    type: 'number',
+    default: 2,
+    labelFa: 'سن حساب که «تازه‌ساخت» شمرده می‌شود (ساعت)',
+  },
+  'risk.sharedIpAccountThreshold': {
+    group: 'risk',
+    type: 'number',
+    default: 3,
+    labelFa: 'تعداد حساب مجاز از یک IP',
+  },
+  'risk.sharedIpWindowHours': {
+    group: 'risk',
+    type: 'number',
+    default: 24,
+    labelFa: 'بازه بررسی حساب‌های هم‌IP (ساعت)',
+  },
+  'risk.verificationScore': {
+    group: 'risk',
+    type: 'number',
+    default: 30,
+    labelFa: 'امتیاز ریسکی که تأیید هویت را الزامی می‌کند',
+  },
+  'risk.manualReviewScore': {
+    group: 'risk',
+    type: 'number',
+    default: 60,
+    labelFa: 'امتیاز ریسکی که سفارش را به بررسی دستی می‌فرستد',
+  },
+
+  // ── Security ─────────────────────────────────────────────────
+  'security.require2faForStaff': {
+    group: 'security',
+    type: 'boolean',
+    default: false,
+    labelFa: 'الزام ورود دومرحله‌ای برای همه کارکنان',
+  },
 
   // ── Pricing ──────────────────────────────────────────────────
   'pricing.staleHours': {
