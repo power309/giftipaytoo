@@ -112,14 +112,15 @@ export type SubmitOrderInput = {
  * message already explains what to go verify), and manual review
  * (`needsReview`) never blocks checkout — the order is created normally and
  * flagged for staff, which the result page explains. See docs/CHECKOUT.md
- * "Seams" for the full write-up of this and the guest-payment/guest-reveal
- * gaps reflected in the codes below.
+ * "Seams" for the full write-up. Guest checkout CAN pay online: the guest
+ * proves ownership with the contact the order was placed with, which
+ * `startPayment` re-verifies against the stored order.
  */
 export type SubmitOrderResult =
   | { ok: true; redirectUrl: string; orderNumber: string }
   | { ok: true; paidByWallet: true; orderNumber: string }
   | { ok: false; code: 'OUT_OF_STOCK'; messageFa: string; lines: string[] }
-  | { ok: false; code: 'GUEST_PAYMENT_UNSUPPORTED'; messageFa: string; orderNumber: string }
+  | { ok: false; code: 'GUEST_CONTACT_REQUIRED'; messageFa: string; orderNumber: string }
   | { ok: false; code: 'VALIDATION'; messageFa: string }
   | { ok: false; code: 'GATEWAY_UNAVAILABLE'; messageFa: string }
   | { ok: false; code: 'SERVICE_UNAVAILABLE'; messageFa: string }

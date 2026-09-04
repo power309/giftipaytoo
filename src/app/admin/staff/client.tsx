@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { Plus, ShieldOff, Activity } from 'lucide-react';
 import { Button, Modal, Field, Input, Checkbox, Tabs, Badge } from '@/components/ui';
 import { StatusPill } from '@/components/admin/kit';
-import { toPersianDigits } from '@/lib/persian';
 import {
   inviteStaffMember, updateStaffRoles, setStaffStatus, resetStaffTwoFactor, createRole, toggleRolePermission,
 } from './actions';
@@ -313,4 +312,3 @@ function RolesMatrix({ roles, permGroups }: { roles: RoleRow[]; permGroups: Perm
   );
 }
 
-void toPersianDigits;

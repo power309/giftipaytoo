@@ -11,7 +11,7 @@ type WrapKind = 'bold' | 'italic' | 'h2' | 'ul' | 'ol' | 'link';
 function applyWrap(text: string, start: number, end: number, kind: WrapKind): { text: string; selStart: number; selEnd: number } {
   const selected = text.slice(start, end) || 'متن';
   let before = text.slice(0, start);
-  let after = text.slice(end);
+  const after = text.slice(end);
   let inserted = selected;
 
   switch (kind) {

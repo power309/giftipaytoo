@@ -25,7 +25,7 @@ import type { SubmitOrderInput, SubmitOrderResult } from '../_lib/types';
  *                                  (non-nullable). Guest checkout can create an
  *                                  order but currently has no way to pay for it
  *                                  through this seam. We surface that honestly
- *                                  (`GUEST_PAYMENT_UNSUPPORTED`) instead of
+ *                                  (`GUEST_CONTACT_REQUIRED`) instead of
  *                                  forcing an empty string through and letting
  *                                  it come back as a confusing "no permission".
  *
@@ -93,12 +93,15 @@ export async function submitOrder(input: SubmitOrderInput): Promise<SubmitOrderR
     return { ok: true, paidByWallet: true, orderNumber: result.orderNumber };
   }
 
-  if (!user) {
-    // The order exists (and the guest can already track/view it), but
-    // `startPayment` requires a signed-in userId — see the module docstring.
-    return fail('GUEST_PAYMENT_UNSUPPORTED', 'برای تکمیل پرداخت این سفارش، لطفاً وارد حساب کاربری خود شوید یا ثبت‌نام کنید.', {
-      orderNumber: result.orderNumber,
-    });
+  // A guest pays by proving the contact the order was placed with;
+  // `startPayment` re-checks it against the stored order itself.
+  const guestPaymentContact = user ? null : (guestContact?.email ?? guestContact?.mobile ?? null);
+  if (!user && !guestPaymentContact) {
+    return fail(
+      'GUEST_CONTACT_REQUIRED',
+      'برای پرداخت این سفارش، ایمیل یا شماره موبایلی که سفارش با آن ثبت شده لازم است.',
+      { orderNumber: result.orderNumber },
+    );
   }
 
   const ip = await clientIp();
@@ -107,7 +110,13 @@ export async function submitOrder(input: SubmitOrderInput): Promise<SubmitOrderR
     async (mod) => {
       const startPayment = mod.startPayment as ((input: unknown) => Promise<StartPaymentResult>) | undefined;
       if (typeof startPayment !== 'function') throw new Error('ماژول درگاه پرداخت کامل نیست.');
-      return startPayment({ orderId: result.orderId, gatewayKey: data.gatewayKey, userId: user.id, ip });
+      return startPayment({
+        orderId: result.orderId,
+        gatewayKey: data.gatewayKey,
+        userId: user?.id ?? null,
+        guestContact: guestPaymentContact,
+        ip,
+      });
     },
     { unavailableMessageFa: 'اتصال به درگاه پرداخت هنوز فعال نشده است.' },
   );

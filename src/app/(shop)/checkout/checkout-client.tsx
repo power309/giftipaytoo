@@ -306,7 +306,7 @@ export function CheckoutClient({
                       ))}
                     </ul>
                   ) : null}
-                  {submitError.code === 'GUEST_PAYMENT_UNSUPPORTED' && (
+                  {submitError.code === 'GUEST_CONTACT_REQUIRED' && (
                     <div className="mt-2">
                       <Link href={`/auth/login?next=${encodeURIComponent(`/checkout/result/${submitError.orderNumber}`)}`}>
                         <Button size="sm" variant="secondary">

@@ -6,6 +6,7 @@ import { audit } from '../audit';
 import { enforceRateLimit } from '../rate-limit';
 import { logger } from '@/lib/logger';
 import { env } from '@/lib/env';
+import { normalizeIranMobile } from '@/lib/persian';
 import { getGateway, getGatewayUnchecked } from './registry';
 import { isUniqueConstraintError } from './prisma-utils';
 
@@ -118,12 +119,41 @@ async function settleUnpaidOrder(
   });
 }
 
+/**
+ * Constant-time-ish comparison of a supplied guest contact against the order's
+ * stored email/phone. Mobile numbers are normalised so 09.., +989.. and 989..
+ * all compare equal.
+ */
+function guestContactMatches(
+  guestEmail: string | null,
+  guestPhone: string | null,
+  supplied: string | null | undefined,
+): boolean {
+  if (!supplied) return false;
+  const value = supplied.trim();
+  if (!value) return false;
+  if (guestEmail && guestEmail.toLowerCase() === value.toLowerCase()) return true;
+  if (guestPhone) {
+    const a = normalizeIranMobile(guestPhone) ?? guestPhone;
+    const b = normalizeIranMobile(value) ?? value;
+    if (a === b) return true;
+  }
+  return false;
+}
+
 // ── Start a payment attempt ───────────────────────────────────────────────
 
 export type StartPaymentInput = {
   orderId: string;
   gatewayKey: string;
-  userId: string;
+  /** Set for a signed-in customer. */
+  userId?: string | null;
+  /**
+   * Set instead of `userId` for a guest order: the email or mobile the order
+   * was placed with. It is re-checked against the stored order here, so the
+   * authorisation decision lives in this service rather than in the caller.
+   */
+  guestContact?: string | null;
   ip: string;
 };
 
@@ -132,7 +162,10 @@ export type StartPaymentResult =
   | { ok: false; code: string; messageFa: string };
 
 export async function startPayment(input: StartPaymentInput): Promise<StartPaymentResult> {
-  await enforceRateLimit('payment.start', `${input.userId}:${input.ip}`);
+  await enforceRateLimit(
+    'payment.start',
+    `${input.userId ?? input.guestContact ?? 'anon'}:${input.ip}`,
+  );
 
   const order = await db.order.findUnique({
     where: { id: input.orderId },
@@ -141,13 +174,20 @@ export async function startPayment(input: StartPaymentInput): Promise<StartPayme
   if (!order) {
     return { ok: false, code: 'ORDER_NOT_FOUND', messageFa: 'سفارش یافت نشد.' };
   }
-  if (order.userId !== input.userId) {
+
+  // A registered order is payable only by its owner; a guest order only by
+  // someone who can name the exact contact it was placed with.
+  const authorised = order.userId
+    ? !!input.userId && order.userId === input.userId
+    : guestContactMatches(order.guestEmail, order.guestPhone, input.guestContact);
+
+  if (!authorised) {
     await audit({
       action: 'payment.start.denied',
       entity: 'Order',
       entityId: order.id,
-      actorId: input.userId,
-      summary: 'تلاش برای پرداخت سفارشی که متعلق به کاربر نیست.',
+      actorId: input.userId ?? null,
+      summary: 'تلاش برای پرداخت سفارشی که متعلق به درخواست‌کننده نیست.',
       ip: input.ip,
     });
     return { ok: false, code: 'FORBIDDEN', messageFa: 'شما اجازه پرداخت این سفارش را ندارید.' };

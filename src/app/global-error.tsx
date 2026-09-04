@@ -87,6 +87,10 @@ export default function GlobalError({
           >
             تلاش دوباره
           </button>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages --
+              global-error replaces the root layout, so the Next router (and
+              therefore <Link>) is not mounted; a plain anchor with a full
+              document load is the only reliable way back. */}
           <a
             href="/"
             style={{
