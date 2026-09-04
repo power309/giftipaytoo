@@ -300,7 +300,10 @@ const ICONS: Record<PosterGlyph, string> = {
 function iconMarkup(glyph: PosterGlyph, opts: { x: number; y: number; size: number; color: string }): string {
   const { x, y, size, color } = opts;
   const scale = size / 24;
-  return `<g transform="translate(${x - size / 2} ${y - size / 2}) scale(${scale})" fill="${color}" stroke="none">${ICONS[glyph]}</g>`;
+  // Icons mix filled shapes and `stroke="currentColor"` outlines. `fill` alone
+  // does not resolve `currentColor` in this SVG renderer (confirmed by test —
+  // see docs/MEDIA.md) — the `color` presentation attribute must be set too.
+  return `<g transform="translate(${x - size / 2} ${y - size / 2}) scale(${scale})" fill="${color}" color="${color}" stroke="none">${ICONS[glyph]}</g>`;
 }
 
 function defaultGlyph(kind: PosterKind): PosterGlyph {

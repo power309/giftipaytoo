@@ -463,7 +463,7 @@ async function generateBlog(prisma: PrismaClient, cli: Cli, summary: Summary): P
   if (cli.demo) {
     await runPool(DEMO_BLOG_POSTS, cli.concurrency, async (p) => {
       const webPath = `/media/blog/${p.slug}.webp`;
-      await runTask(`blog:${p.slug}`, webPath, () => renderBlogCoverSvg({ titleFa: p.titleFa, categoryFa: p.categoryFa, accentColor: p.accent }), cli, summary);
+      await runTask(`blog:${p.slug}`, webPath, () => renderBlogCoverSvg({ titleFa: p.titleFa, categoryFa: p.categoryFa, accentColor: p.accent }), cli, summary, { avif: true });
     });
     return;
   }

@@ -7,6 +7,7 @@ import { enforceRateLimit } from '../rate-limit';
 import { logger } from '@/lib/logger';
 import { env } from '@/lib/env';
 import { getGateway, getGatewayUnchecked } from './registry';
+import { isUniqueConstraintError } from './prisma-utils';
 
 type DbOrTx = typeof db | Prisma.TransactionClient;
 
@@ -15,10 +16,6 @@ const PAYMENT_ATTEMPT_TTL_MS = 30 * 60 * 1000;
 /** Interactive transactions here may include one outbound gateway HTTP call, so give them real headroom. */
 const TX_TIMEOUT_MS = 25_000;
 const TX_MAX_WAIT_MS = 10_000;
-
-function isUniqueConstraintError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && (err as { code?: string }).code === 'P2002';
-}
 
 /**
  * Pure amount check used right before any success transition. Both call
@@ -257,6 +254,7 @@ export type VerifyPaymentStatus =
   | 'ALREADY_PAID'
   | 'CANCELED'
   | 'FAILED'
+  | 'EXPIRED'
   | 'VERIFICATION_FAILED'
   | 'AWAITING_MANUAL_REVIEW'
   | 'UNKNOWN';

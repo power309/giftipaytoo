@@ -2,6 +2,7 @@ import 'server-only';
 import { db } from '../db';
 import { env } from '@/lib/env';
 import { logger } from '@/lib/logger';
+import { isUniqueConstraintError } from './prisma-utils';
 import type {
   PaymentGateway,
   PaymentInitInput,
@@ -205,10 +206,6 @@ export class WalletGateway implements PaymentGateway {
     const status = params.get('Status');
     return { authority, canceled: status !== 'OK' };
   }
-}
-
-function isUniqueConstraintError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && (err as { code?: string }).code === 'P2002';
 }
 
 export const walletGateway = new WalletGateway();

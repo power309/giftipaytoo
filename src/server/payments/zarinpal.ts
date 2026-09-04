@@ -99,11 +99,7 @@ const requestResponseSchema = z.object({
     .nullable()
     .optional(),
   errors: z
-    .union([
-      z.object({ code: z.number().optional(), message: z.string().optional() }),
-      z.array(z.unknown()),
-      z.object({}).strict(),
-    ])
+    .union([z.object({ code: z.number().optional(), message: z.string().optional() }), z.array(z.unknown())])
     .nullable()
     .optional(),
 });
@@ -122,11 +118,7 @@ const verifyResponseSchema = z.object({
     .nullable()
     .optional(),
   errors: z
-    .union([
-      z.object({ code: z.number().optional(), message: z.string().optional() }),
-      z.array(z.unknown()),
-      z.object({}).strict(),
-    ])
+    .union([z.object({ code: z.number().optional(), message: z.string().optional() }), z.array(z.unknown())])
     .nullable()
     .optional(),
 });
