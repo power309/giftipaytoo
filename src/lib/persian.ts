@@ -46,7 +46,7 @@ export function normalizeFa(input: string): string {
     .replace(/ة/g, 'ه') // ة → ه
     .replace(/[ً-ٰٟ]/g, '') // harakat
     .replace(/ـ/g, '') // tatweel
-    .replace(/[​-‏  ]/g, '') // zero width / bidi marks
+    .replace(/[\u200B-\u200F\u2028\u2029]/g, '') // zero width / bidi marks
     .replace(/‌/g, ' ') // ZWNJ → space so "گیفت‌کارت" matches "گیفت کارت"
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')

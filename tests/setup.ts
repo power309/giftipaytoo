@@ -1,6 +1,8 @@
 import { config } from 'dotenv';
+
 config({ path: '.env' });
 
-// `server-only` throws when imported outside a React Server Component build.
-// Tests import server modules directly, so stub it out.
-process.env.NODE_ENV = process.env.NODE_ENV || 'test';
+// Tests import server modules directly, outside a Next.js build.
+if (!process.env.NODE_ENV) {
+  Object.defineProperty(process.env, 'NODE_ENV', { value: 'test', configurable: true });
+}
