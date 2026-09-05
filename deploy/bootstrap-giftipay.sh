@@ -40,6 +40,7 @@ DB_NAME=giftipay_prod
 DB_USER=giftipay
 CADDYFILE=/etc/caddy/Caddyfile
 CADDY_SITES_DIR=/etc/caddy/sites.d
+CADDY_ACCESS_LOG=/var/log/caddy/giftipay-access.log
 RUNNER_USER=gift-runner
 MAKE_SWAP=1
 
@@ -464,7 +465,7 @@ $DOMAIN {
 	header @static Cache-Control "public, max-age=31536000, immutable"
 
 	log {
-		output file /var/log/caddy/giftipay-access.log
+		output file $CADDY_ACCESS_LOG
 	}
 }
 CADDYEOF
@@ -490,7 +491,12 @@ LINE="$IMPORT_LINE"
 grep -qF "\$LINE" "\$CADDYFILE" && exit 0
 cp -a "\$CADDYFILE" "$CONFIG_BACKUP_DIR/Caddyfile.\$(date -u +%Y%m%dT%H%M%SZ).preguard"
 printf '\n# Re-added by giftipay-caddy-guard\n%s\n' "\$LINE" >> "\$CADDYFILE"
-caddy validate --config "\$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 && systemctl reload caddy
+# validate runs as root and reload runs as the caddy user; both open this file.
+[ -e $CADDY_ACCESS_LOG ] || install -o caddy -g caddy -m 0600 /dev/null $CADDY_ACCESS_LOG
+chown caddy:caddy $CADDY_ACCESS_LOG
+caddy validate --config "\$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || exit 1
+chown caddy:caddy $CADDY_ACCESS_LOG
+systemctl reload caddy
 logger -t giftipay-caddy-guard "re-added GiftiPay import line and reloaded caddy"
 GUARDEOF
 chmod 0755 /usr/local/sbin/giftipay-caddy-guard.sh
@@ -513,9 +519,20 @@ WantedBy=multi-user.target
 UNITEOF
 ok "installed giftipay-caddy-guard (path unit)"
 
+# `caddy validate` provisions the config rather than just parsing it, so it
+# OPENS the access log — creating it as root:root 0600 when run from here. The
+# reload afterwards runs as the unprivileged `caddy` user (caddy.service's
+# ExecReload) and would then fail with EACCES on our own file. Create it as
+# caddy's up front, and re-assert after validate, so both steps can open it.
+install -d -o caddy -g caddy -m 0755 /var/log/caddy
+[ -e "$CADDY_ACCESS_LOG" ] || install -o caddy -g caddy -m 0600 /dev/null "$CADDY_ACCESS_LOG"
+chown caddy:caddy "$CADDY_ACCESS_LOG"; chmod 0600 "$CADDY_ACCESS_LOG"
+ok "$CADDY_ACCESS_LOG is caddy:caddy 0600"
+
 log "Validating Caddy config BEFORE reloading (CineFlow stays up if invalid)"
 if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
   ok "Caddyfile validates"
+  chown caddy:caddy "$CADDY_ACCESS_LOG"; chmod 0600 "$CADDY_ACCESS_LOG"
   systemctl reload caddy
   ok "caddy reloaded (reload, not restart — CineFlow's connections are preserved)"
 else

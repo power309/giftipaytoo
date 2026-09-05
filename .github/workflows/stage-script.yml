@@ -1,16 +1,25 @@
-name: 03 · Stage bootstrap script for a root operator
+name: 03 · Stage a script for a root operator
 
-# One-time helper. The runner user (`gift-runner`) has no sudo, so it cannot run
-# the bootstrap itself — a human with root has to. This job's whole job is to put
-# a verified copy of deploy/bootstrap-giftipay.sh somewhere that operator can
-# reach it, and to print the commit and checksum so they can confirm they are
-# running the file this repository actually contains.
+# The runner user (`gift-runner`) has no sudo, so the handful of steps that need
+# root have to be run by a human. This job puts a verified copy of one script
+# from deploy/ where that operator can reach it, and prints the commit and
+# checksum so they can confirm they are running the file this repository
+# actually contains.
 #
 # It writes exactly one path, inside the runner user's own home. It does not use
 # sudo, does not touch CineFlow, and does not execute the script.
 
 on:
   workflow_dispatch:
+    inputs:
+      script:
+        description: Which script under deploy/ to stage
+        type: choice
+        required: true
+        default: repair-caddy-reload.sh
+        options:
+          - repair-caddy-reload.sh
+          - bootstrap-giftipay.sh
 
 concurrency:
   group: giftipay-stage-bootstrap
@@ -23,8 +32,8 @@ jobs:
   stage:
     runs-on: [self-hosted]
     env:
-      SRC: deploy/bootstrap-giftipay.sh
-      DEST: /home/gift-runner/bootstrap-giftipay.sh
+      SRC: deploy/${{ inputs.script }}
+      DEST: /home/gift-runner/${{ inputs.script }}
 
     steps:
       - name: Check out the dispatched commit
@@ -108,8 +117,8 @@ jobs:
             echo
             echo '```'
             echo "sha256sum ${DEST}   # expect ${sum}"
-            echo "sudo install -m 0755 -o root -g root ${DEST} /root/bootstrap-giftipay.sh"
-            echo "sudo bash /root/bootstrap-giftipay.sh"
+            echo "sudo install -m 0755 -o root -g root ${DEST} /root/$(basename "${DEST}")"
+            echo "sudo bash /root/$(basename "${DEST}")"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
           echo "SHA-256: ${sum}"
