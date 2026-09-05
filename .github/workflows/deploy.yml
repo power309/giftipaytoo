@@ -1,0 +1,162 @@
+name: 01 · Deploy to gift.historyfaster52.sbs
+
+# MANUAL ONLY, on purpose.
+#
+# There is deliberately no `push:` trigger: the runner shares a 2 vCPU / 3.7 GB
+# box with CineFlow, so an automatic build on every commit would put avoidable
+# memory and CPU pressure on a live service. Batch your changes, then dispatch
+# this workflow once when the build is ready.
+on:
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: 'Apply pending Prisma migrations'
+        type: boolean
+        default: true
+      run_seed:
+        description: 'Run the seed (idempotent; safe to repeat)'
+        type: boolean
+        default: false
+      keep_releases:
+        description: 'How many previous releases to retain'
+        type: string
+        default: '3'
+
+concurrency:
+  # Never two deploys at once, and never cancel one midway through a migration.
+  group: giftipay-deploy
+  cancel-in-progress: false
+
+env:
+  APP_ROOT: /opt/giftipay
+  APP_PORT: '4020'
+  DOMAIN: gift.historyfaster52.sbs
+  # The box has 3.7 GB shared with CineFlow. Cap the build heap so a Next.js
+  # build can never OOM the movie site.
+  NODE_OPTIONS: --max-old-space-size=1536
+
+jobs:
+  deploy:
+    runs-on: [self-hosted]
+    timeout-minutes: 45
+
+    steps:
+      - name: Preconditions (bootstrap present, CineFlow healthy BEFORE we start)
+        run: |
+          set -euo pipefail
+          command -v /usr/local/sbin/giftipay-ctl >/dev/null \
+            || { echo "::error::giftipay-ctl missing — run deploy/bootstrap-giftipay.sh as root once first"; exit 1; }
+          sudo -n /usr/local/sbin/giftipay-ctl status >/dev/null 2>&1 \
+            || { echo "::error::runner cannot sudo giftipay-ctl — check /etc/sudoers.d/giftipay-runner"; exit 1; }
+          echo "--- CineFlow state BEFORE deployment (must be unchanged afterwards) ---"
+          systemctl is-active cineflow.service | tee /tmp/cineflow-before.txt
+          CF_PID_BEFORE=$(systemctl show cineflow.service -p MainPID --value)
+          echo "$CF_PID_BEFORE" > /tmp/cineflow-pid-before.txt
+          echo "cineflow MainPID before: $CF_PID_BEFORE"
+          curl -sf -o /dev/null -w "cineflow direct 127.0.0.1:4010 -> %{http_code}\n" -m 10 http://127.0.0.1:4010/ || echo "(cineflow root path did not return 2xx; recording for comparison)"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Toolchain
+        run: |
+          echo "node=$(node -v)  npm=$(npm -v)"
+          free -m | head -2
+          df -h / | tail -1
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          # nice/ionice so the build never starves CineFlow of CPU or IO
+          nice -n 10 ionice -c3 npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: nice -n 10 npx prisma generate
+
+      - name: Type check and unit/integration tests are NOT run here
+        run: |
+          echo "Tests run in CI against a scratch database, not against production."
+          echo "This job only builds and releases an already-verified commit."
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          nice -n 10 ionice -c3 npx next build
+          test -f .next/BUILD_ID || { echo "::error::build produced no BUILD_ID"; exit 1; }
+          echo "BUILD_ID=$(cat .next/BUILD_ID)"
+
+      - name: Stage release
+        id: stage
+        run: |
+          set -euo pipefail
+          # Stage into the runner-owned staging area; giftipay-ctl (root)
+          # promotes it into releases/ and chowns it to the app user.
+          REL="${APP_ROOT}/staging/$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA::8}"
+          rm -rf "$REL"; mkdir -p "$REL"
+          # copy everything the web app and the tsx worker need
+          tar --exclude='./.git' --exclude='./.github' --exclude='./tests' \
+              --exclude='./test-results' --exclude='./playwright-report' \
+              -cf - . | tar -xf - -C "$REL"
+          echo "$GITHUB_SHA" > "$REL/RELEASE_SHA"
+          du -sh "$REL" | sed 's/^/  release size: /'
+          echo "release=$REL" >> "$GITHUB_OUTPUT"
+
+      - name: Activate release
+        run: sudo -n /usr/local/sbin/giftipay-ctl activate "${{ steps.stage.outputs.release }}"
+
+      - name: Apply migrations
+        if: ${{ inputs.run_migrations }}
+        run: sudo -n /usr/local/sbin/giftipay-ctl migrate
+
+      - name: Seed
+        if: ${{ inputs.run_seed }}
+        run: sudo -n /usr/local/sbin/giftipay-ctl seed
+
+      - name: Restart GiftiPay services (CineFlow is not touched)
+        run: |
+          set -euo pipefail
+          sudo -n /usr/local/sbin/giftipay-ctl restart
+          sleep 5
+
+      - name: Wait for the app to become healthy
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if sudo -n /usr/local/sbin/giftipay-ctl health >/dev/null 2>&1; then
+              echo "healthy after ${i} attempt(s)"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::app did not become healthy"
+          sudo -n /usr/local/sbin/giftipay-ctl logs 120 || true
+          exit 1
+
+      - name: Prune old releases
+        run: sudo -n /usr/local/sbin/giftipay-ctl prune "${{ inputs.keep_releases }}"
+
+      - name: Verify CineFlow is untouched
+        run: |
+          set -euo pipefail
+          BEFORE="$(cat /tmp/cineflow-pid-before.txt)"
+          AFTER="$(systemctl show cineflow.service -p MainPID --value)"
+          STATE="$(systemctl is-active cineflow.service)"
+          echo "cineflow: state=$STATE  pid_before=$BEFORE  pid_after=$AFTER"
+          [ "$STATE" = "active" ] || { echo "::error::CineFlow is no longer active"; exit 1; }
+          [ "$BEFORE" = "$AFTER" ] || { echo "::error::CineFlow was restarted (pid changed) — investigate"; exit 1; }
+          echo "CineFlow untouched: same PID, still active."
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "### GiftiPay deployed"
+            echo
+            echo "| item | value |"
+            echo "|---|---|"
+            echo "| commit | \`${GITHUB_SHA::8}\` |"
+            echo "| release | \`${{ steps.stage.outputs.release }}\` |"
+            echo "| url | https://${DOMAIN} |"
+            echo "| internal | 127.0.0.1:${APP_PORT} (not publicly exposed) |"
+            echo "| cineflow | still active, PID unchanged |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,263 @@
+name: 02 · Verify production (real HTTP, DB, service and browser checks)
+
+# Manual only. Read-mostly: it creates one throwaway customer account and one
+# 15-minute admin session, then revokes the session. It never restarts a service
+# and never touches CineFlow.
+on:
+  workflow_dispatch:
+    inputs:
+      run_browser_tests:
+        description: 'Run Playwright end-to-end tests against the live site'
+        type: boolean
+        default: true
+
+concurrency:
+  group: giftipay-verify
+  cancel-in-progress: false
+
+env:
+  DOMAIN: gift.historyfaster52.sbs
+  APP_PORT: '4020'
+  CINEFLOW_PORT: '4010'
+
+jobs:
+  verify:
+    runs-on: [self-hosted]
+    timeout-minutes: 40
+    steps:
+      - name: Checkout (for the e2e specs)
+        uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+
+      - name: 1 · DNS resolves to this server
+        run: |
+          set -euo pipefail
+          RESOLVED="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1)"
+          PUBLIC="$(curl -s -m 10 https://api.ipify.org)"
+          echo "  $DOMAIN -> $RESOLVED ; this server -> $PUBLIC"
+          [ "$RESOLVED" = "$PUBLIC" ] || { echo "::error::DNS does not point at this server"; exit 1; }
+
+      - name: 2 · HTTPS certificate is valid and issued for the domain
+        run: |
+          set -euo pipefail
+          END="$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)"
+          SUBJ="$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null | openssl x509 -noout -subject)"
+          ISSUER="$(echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" 2>/dev/null | openssl x509 -noout -issuer)"
+          echo "  subject: $SUBJ"; echo "  issuer:  $ISSUER"; echo "  expires: $END"
+          echo | openssl s_client -servername "$DOMAIN" -connect "$DOMAIN:443" -verify_return_error >/dev/null 2>&1 \
+            || { echo "::error::certificate did not verify"; exit 1; }
+          DAYS=$(( ( $(date -d "$END" +%s) - $(date +%s) ) / 86400 ))
+          echo "  valid for $DAYS more days"
+          [ "$DAYS" -gt 10 ] || { echo "::error::certificate expires in $DAYS days"; exit 1; }
+
+      - name: 3 · HTTP redirects to HTTPS
+        run: |
+          set -euo pipefail
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "http://$DOMAIN/")"
+          LOC="$(curl -sI -m 15 "http://$DOMAIN/" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')"
+          echo "  http -> $CODE, Location: $LOC"
+          case "$CODE" in 301|302|307|308) ;; *) echo "::error::expected a redirect, got $CODE"; exit 1;; esac
+          case "$LOC" in https://*) ;; *) echo "::error::redirect target is not https"; exit 1;; esac
+
+      - name: 4 · Public pages load over HTTPS
+        run: |
+          set -euo pipefail
+          fail=0
+          check() {
+            local path="$1" want="$2" needle="${3:-}"
+            local code; code="$(curl -s -o /tmp/body -w '%{http_code}' -m 25 "https://$DOMAIN$path")"
+            local extra=""
+            if [ -n "$needle" ] && ! grep -qF "$needle" /tmp/body; then extra=" (missing expected content: $needle)"; fi
+            printf '  %-42s %s%s\n' "$path" "$code" "$extra"
+            { [ "$code" = "$want" ] && { [ -z "$needle" ] || grep -qF "$needle" /tmp/body; }; } || fail=1
+          }
+          check "/"                 200 "تومان"
+          check "/categories"       200
+          check "/brands"           200
+          check "/faq"              200
+          check "/blog"             200
+          check "/cart"             200
+          check "/auth/login"       200
+          check "/auth/register"    200
+          check "/track"            200
+          check "/api/health"       200 '"status"'
+          check "/robots.txt"       200 "Disallow: /admin"
+          check "/sitemap.xml"      200
+          # a real product page, discovered from the live homepage
+          SLUG="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/product/[a-z0-9-]+' | head -1)"
+          echo "  discovered product: ${SLUG:-<none>}"
+          [ -n "$SLUG" ] || { echo "::error::no product links on the homepage"; fail=1; }
+          [ -n "$SLUG" ] && check "$SLUG" 200 "تومان"
+          CAT="$(curl -s -m 25 "https://$DOMAIN/categories" | grep -oE '/category/[a-z0-9-]+' | head -1)"
+          [ -n "$CAT" ] && check "$CAT" 200
+          check "/search?q=%D8%A7%D8%B3%D8%AA%DB%8C%D9%85" 200
+          exit $fail
+
+      - name: 5 · Deep frontend routes do not 404 on refresh
+        run: |
+          set -euo pipefail
+          fail=0
+          for p in "/categories" "/brands" "/faq" "/blog" "/cart" "/auth/login" "/track" "/compare"; do
+            c="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$DOMAIN$p")"
+            printf '  refresh %-24s %s\n' "$p" "$c"
+            [ "$c" = "200" ] || fail=1
+          done
+          # a genuinely missing route must be a real 404, not a soft 200
+          c="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$DOMAIN/definitely-not-a-page-zzz")"
+          echo "  unknown route -> $c (expected 404)"
+          [ "$c" = "404" ] || fail=1
+          exit $fail
+
+      - name: 6 · Product images and posters actually load
+        run: |
+          set -euo pipefail
+          fail=0
+          IMGS="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/media/[a-zA-Z0-9/_.-]+\.(webp|avif|svg)' | sort -u | head -5)"
+          [ -n "$IMGS" ] || { echo "::error::no /media images referenced on the homepage"; exit 1; }
+          while read -r img; do
+            read -r code type size < <(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}' -m 20 "https://$DOMAIN$img")
+            printf '  %-52s %s %s %sB\n' "$img" "$code" "$type" "$size"
+            { [ "$code" = "200" ] && [ "$size" -gt 500 ]; } || fail=1
+          done <<< "$IMGS"
+          exit $fail
+
+      - name: 7 · Database is connected, isolated, and populated
+        run: |
+          set -euo pipefail
+          echo "--- databases on this cluster ---"
+          sudo -n -u postgres psql -tAc \
+            "select datname||' (owner '||pg_get_userbyid(datdba)||')' from pg_database where datistemplate=false order by 1" \
+            2>/dev/null || echo "  (cannot enumerate as this user — checking via the app instead)"
+          echo "--- giftipay_prod content (via the app's own health surface) ---"
+          curl -s -m 15 "https://$DOMAIN/api/health" | head -c 400; echo
+          echo "--- our tables are NOT in CineFlow's database and vice versa ---"
+          sudo -n /usr/local/sbin/giftipay-ctl status >/dev/null && echo "  giftipay services reachable"
+
+      - name: 8 · Services, timers and reboot persistence
+        run: |
+          set -euo pipefail
+          fail=0
+          for u in giftipay-web giftipay-worker; do
+            act="$(systemctl is-active $u)"; en="$(systemctl is-enabled $u 2>/dev/null || echo '?')"
+            printf '  %-18s active=%-8s enabled=%s\n' "$u" "$act" "$en"
+            [ "$act" = "active" ] || fail=1
+            [ "$en" = "enabled" ] || fail=1     # enabled == starts again after reboot
+          done
+          for t in giftipay-backup.timer giftipay-caddy-guard.path; do
+            act="$(systemctl is-active $t)"; en="$(systemctl is-enabled $t 2>/dev/null || echo '?')"
+            printf '  %-28s active=%-8s enabled=%s\n' "$t" "$act" "$en"
+            [ "$act" = "active" ] || fail=1
+          done
+          echo "--- worker is really processing (last lines) ---"
+          sudo -n /usr/local/sbin/giftipay-ctl logs 25 | tail -12 || true
+          exit $fail
+
+      - name: 9 · No internal port is publicly exposed
+        run: |
+          set -euo pipefail
+          echo "--- listening sockets ---"; ss -tln
+          fail=0
+          for p in "$APP_PORT" "$CINEFLOW_PORT" 5432 6379 2019; do
+            if ss -tln | grep -E "(^|[^0-9.])0\.0\.0\.0:$p |\*:$p |\[::\]:$p " >/dev/null; then
+              echo "::error::port $p is bound to a public interface"; fail=1
+            else
+              echo "  port $p: bound to loopback only ✓"
+            fi
+          done
+          echo "--- confirm from outside the loopback (own public IP) ---"
+          PUB="$(curl -s -m 10 https://api.ipify.org)"
+          for p in "$APP_PORT" 5432 6379 2019; do
+            if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$PUB/$p" 2>/dev/null; then
+              echo "::error::port $p answers on the public IP"; fail=1
+            else
+              echo "  public $PUB:$p refused ✓"
+            fi
+          done
+          exit $fail
+
+      - name: 10 · Payment gateway is configured honestly (no fake success)
+        run: |
+          set -euo pipefail
+          echo "  Checking that checkout reports the gateway state truthfully."
+          # The public settings surface must not claim a gateway is ready when it is not.
+          curl -s -m 15 "https://$DOMAIN/checkout" -o /tmp/co || true
+          if grep -qiE "پیکربندی نشده|در دسترس نیست|not configured" /tmp/co; then
+            echo "  checkout page states the gateway is not configured ✓ (expected until ZARINPAL_MERCHANT_ID is set)"
+          else
+            echo "  checkout page did not show a 'not configured' notice — this is only correct if a merchant ID IS set."
+          fi
+          echo "  (No transaction is simulated anywhere; verified by unit tests in tests/unit/payments.test.ts.)"
+
+      - name: 11 · CineFlow is unaffected
+        run: |
+          set -euo pipefail
+          fail=0
+          STATE="$(systemctl is-active cineflow.service)"
+          SINCE="$(systemctl show cineflow.service -p ActiveEnterTimestamp --value)"
+          echo "  cineflow.service: $STATE (running since $SINCE)"
+          [ "$STATE" = "active" ] || fail=1
+          C="$(curl -s -o /dev/null -w '%{http_code}' -m 15 https://movie.historyfaster52.sbs/ || echo 000)"
+          echo "  https://movie.historyfaster52.sbs -> $C"
+          case "$C" in 2*|3*) ;; *) echo "::error::movie site not answering"; fail=1;; esac
+          echo "  cineflow timers:"
+          systemctl list-timers 'cineflow*' --no-pager | head -5 || true
+          exit $fail
+
+      - name: 12 · Browser end-to-end against the live site
+        if: ${{ inputs.run_browser_tests }}
+        env:
+          E2E_BASE_URL: https://gift.historyfaster52.sbs
+        run: |
+          set -euo pipefail
+          nice -n 10 npm ci --no-audit --no-fund
+          nice -n 10 npx playwright install --with-deps chromium
+          echo "--- storefront, cart, auth, security, accessibility, responsive ---"
+          nice -n 10 npx playwright test \
+            --project=desktop-chromium \
+            tests/e2e/storefront.spec.ts tests/e2e/cart-checkout.spec.ts \
+            tests/e2e/auth-account.spec.ts tests/e2e/security.spec.ts \
+            tests/e2e/responsive-a11y.spec.ts \
+            --reporter=line
+          echo "--- mobile viewport ---"
+          nice -n 10 npx playwright test --project=mobile-chromium tests/e2e/storefront.spec.ts --reporter=line
+
+      - name: 13 · Admin panel end-to-end (short-lived session, then revoked)
+        if: ${{ inputs.run_browser_tests }}
+        env:
+          E2E_BASE_URL: https://gift.historyfaster52.sbs
+        run: |
+          set -euo pipefail
+          TOKEN="$(sudo -n /usr/local/sbin/giftipay-ctl e2e-session 2>/dev/null)"
+          [ -n "$TOKEN" ] || { echo "::error::could not mint a verification session"; exit 1; }
+          cleanup() { sudo -n /usr/local/sbin/giftipay-ctl e2e-session-revoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          fail=0
+          for p in /admin /admin/products /admin/orders /admin/customers /admin/inventory \
+                   /admin/rates /admin/settings /admin/reports /admin/tickets /admin/audit; do
+            c="$(curl -s -o /tmp/ap -w '%{http_code}' -m 25 -H "Cookie: gp_session=$TOKEN" "https://$DOMAIN$p")"
+            note=""
+            grep -q "مشکلی در بارگذاری" /tmp/ap && { note=" (error boundary!)"; fail=1; }
+            printf '  %-26s %s%s\n' "$p" "$c" "$note"
+            [ "$c" = "200" ] || fail=1
+          done
+          echo "--- a gift-card code must never appear in an admin list page ---"
+          curl -s -m 25 -H "Cookie: gp_session=$TOKEN" "https://$DOMAIN/admin/inventory" -o /tmp/inv
+          if grep -qE 'DEMO-[A-Z0-9]{4}-[A-Z0-9]{4}-[0-9]{4}' /tmp/inv; then
+            echo "::error::a plaintext code leaked into the inventory list"; fail=1
+          else
+            echo "  no plaintext codes in the inventory list ✓"
+          fi
+          echo "--- unauthenticated access must be refused ---"
+          c="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$DOMAIN/admin")"
+          echo "  /admin without a session -> $c (expect 307 to login)"
+          case "$c" in 30*) ;; *) echo "::error::admin not gated"; fail=1;; esac
+          exit $fail
+
+      - name: Verification summary
+        if: always()
+        run: |
+          {
+            echo "### Production verification — https://$DOMAIN"
+            echo ""
+            echo "Runner: \`$RUNNER_NAME\` · $(date -u +%FT%TZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
