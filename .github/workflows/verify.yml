@@ -218,15 +218,36 @@ jobs:
       - name: 10 · Payment gateway is configured honestly (no fake success)
         run: |
           set -euo pipefail
-          echo "  Checking that checkout reports the gateway state truthfully."
-          # The public settings surface must not claim a gateway is ready when it is not.
-          curl -s -m 15 "https://$DOMAIN/checkout" -o /tmp/co || true
-          if grep -qiE "پیکربندی نشده|در دسترس نیست|not configured" /tmp/co; then
-            echo "  checkout page states the gateway is not configured ✓ (expected until ZARINPAL_MERCHANT_ID is set)"
-          else
-            echo "  checkout page did not show a 'not configured' notice — this is only correct if a merchant ID IS set."
-          fi
-          echo "  (No transaction is simulated anywhere; verified by unit tests in tests/unit/payments.test.ts.)"
+          # Grepping the page for a Persian "not configured" notice was useless:
+          # with an empty cart the checkout page renders its empty state and
+          # never reaches the payment section, so the notice is absent whether
+          # or not a gateway is configured. Assert the actual state instead.
+          curl -s -m 20 "https://$DOMAIN/checkout" -o /tmp/co.html
+          RAW="$(grep -o '\\"gateways\\":\[[^]]*\]' /tmp/co.html | head -1 || true)"
+          [ -n "$RAW" ] || RAW="$(grep -o '"gateways":\[[^]]*\]' /tmp/co.html | head -1 || true)"
+          [ -n "$RAW" ] || { echo "::error::the checkout page did not expose any gateway state to check"; exit 1; }
+          printf '%s' "$RAW" > /tmp/gw.raw
+          node -e '
+            const fs=require("fs");
+            const raw=fs.readFileSync("/tmp/gw.raw","utf8").replace(/\\"/g,String.fromCharCode(34));
+            const gws=JSON.parse("{"+raw+"}").gateways;
+            let fail=0;
+            for (const g of gws) {
+              console.log(`  ${g.key.padEnd(10)} mode=${String(g.mode).padEnd(10)} configured=${String(g.configured).padEnd(5)} available=${g.available}`);
+              // The honesty invariant: an unconfigured gateway must never be
+              // offered. This is what stops a dead or faked "pay" button.
+              if (g.configured === false && g.available === true) {
+                console.log(`::error::${g.key} is offered as available while unconfigured`); fail=1;
+              }
+              // A sandbox gateway must never be live on production.
+              if (g.mode === "sandbox" && g.available === true) {
+                console.log(`::error::${g.key} is live in sandbox mode on production`); fail=1;
+              }
+            }
+            process.exit(fail);
+          '
+          echo "  No transaction is simulated anywhere; the gateway adapters return"
+          echo "  NOT_CONFIGURED rather than a fabricated success (tests/unit/payments.test.ts)."
 
       - name: 11 · CineFlow is unaffected
         run: |
