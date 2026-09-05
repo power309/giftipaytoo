@@ -32,7 +32,7 @@ jobs:
       - name: 1 · DNS resolves to this server
         run: |
           set -euo pipefail
-          RESOLVED="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1)"
+          RESOLVED="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || true)"
           PUBLIC="$(curl -s -m 10 https://api.ipify.org)"
           echo "  $DOMAIN -> $RESOLVED ; this server -> $PUBLIC"
           [ "$RESOLVED" = "$PUBLIC" ] || { echo "::error::DNS does not point at this server"; exit 1; }
@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "http://$DOMAIN/")"
-          LOC="$(curl -sI -m 15 "http://$DOMAIN/" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')"
+          LOC="$(curl -sI -m 15 "http://$DOMAIN/" | grep -i '^location:' | tr -d '\r' | awk '{print $2}' || true)"
           echo "  http -> $CODE, Location: $LOC"
           case "$CODE" in 301|302|307|308) ;; *) echo "::error::expected a redirect, got $CODE"; exit 1;; esac
           case "$LOC" in https://*) ;; *) echo "::error::redirect target is not https"; exit 1;; esac
@@ -83,18 +83,24 @@ jobs:
           check "/api/health"       200 '"status"'
           check "/robots.txt"       200 "Disallow: /admin"
           check "/sitemap.xml"      200 "<sitemapindex"
-          # every child sitemap the index and robots.txt advertise must resolve
-          for sm in $(curl -s -m 25 "https://$DOMAIN/sitemap.xml" | grep -oE '<loc>[^<]+</loc>' | sed -E 's|</?loc>||g'); do
+          # Every child sitemap the index advertises must resolve, and every
+          # <loc> must be an absolute URL on THIS domain — a wrong APP_URL
+          # would otherwise publish a sitemap pointing at another host.
+          for sm in $(curl -s -m 25 "https://$DOMAIN/sitemap.xml" | grep -oE '<loc>[^<]+</loc>' | sed -E 's|</?loc>||g' || true); do
+            case "$sm" in
+              "https://$DOMAIN/"*) ;;
+              *) echo "  ::error::sitemap <loc> is not on this domain: $sm"; fail=1; continue ;;
+            esac
             c="$(curl -s -o /dev/null -w '%{http_code}' -m 25 "$sm")"
             printf '  %-52s %s\n' "${sm#https://$DOMAIN}" "$c"
             [ "$c" = "200" ] || fail=1
           done
           # a real product page, discovered from the live homepage
-          SLUG="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/product/[a-z0-9-]+' | head -1)"
+          SLUG="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/product/[a-z0-9-]+' | head -1 || true)"
           echo "  discovered product: ${SLUG:-<none>}"
           [ -n "$SLUG" ] || { echo "::error::no product links on the homepage"; fail=1; }
           [ -n "$SLUG" ] && check "$SLUG" 200 "تومان"
-          CAT="$(curl -s -m 25 "https://$DOMAIN/categories" | grep -oE '/category/[a-z0-9-]+' | head -1)"
+          CAT="$(curl -s -m 25 "https://$DOMAIN/categories" | grep -oE '/category/[a-z0-9-]+' | head -1 || true)"
           [ -n "$CAT" ] && check "$CAT" 200
           check "/search?q=%D8%A7%D8%B3%D8%AA%DB%8C%D9%85" 200
           exit $fail
@@ -118,13 +124,28 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          IMGS="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/media/[a-zA-Z0-9/_.-]+\.(webp|avif|svg)' | sort -u | head -5)"
+          # The homepage is ~400 KB, so it goes to a file: passing it as an
+          # argument would exceed ARG_MAX.
+          curl -s -m 25 "https://$DOMAIN/" -o /tmp/home.html
+          echo "  homepage: $(stat -c%s /tmp/home.html) bytes"
+          # Two forms appear in the markup and both must resolve: the raw file
+          # in <source srcset>, and next/image's percent-encoded optimiser URL.
+          IMGS="$(grep -oE '/media/[a-zA-Z0-9/_.-]+\.(webp|avif|svg)' /tmp/home.html | sort -u | sed -n '1,5p' || true)"
+          OPT="$(grep -oE '/_next/image\?url=%2Fmedia%2F[^" ]+' /tmp/home.html | sed 's/&amp;/\&/g' | sort -u | sed -n '1,3p' || true)"
           [ -n "$IMGS" ] || { echo "::error::no /media images referenced on the homepage"; exit 1; }
-          while read -r img; do
-            read -r code type size < <(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}' -m 20 "https://$DOMAIN$img")
-            printf '  %-52s %s %s %sB\n' "$img" "$code" "$type" "$size"
+          check_img() {
+            # A here-string supplies the trailing newline curl -w omits; without
+            # it `read` returns EOF and `set -e` kills the step before it prints.
+            local url="$1" code type size
+            IFS=' ' read -r code type size <<< "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download}' -m 25 "https://$DOMAIN$url")"
+            printf '  %-64s %s %s %sB\n' "${url:0:64}" "$code" "$type" "$size"
+            case "$type" in image/*) ;; *) fail=1 ;; esac
             { [ "$code" = "200" ] && [ "$size" -gt 500 ]; } || fail=1
-          done <<< "$IMGS"
+          }
+          echo "  -- raw files --"
+          while read -r img; do [ -n "$img" ] && check_img "$img"; done <<< "$IMGS"
+          echo "  -- through next/image (proves the optimiser and sharp work in production) --"
+          while read -r img; do [ -n "$img" ] && check_img "$img"; done <<< "$OPT"
           exit $fail
 
       - name: 7 · Database is connected, isolated, and populated
@@ -136,13 +157,15 @@ jobs:
           # `migrate` is idempotent; its first line names the exact datasource
           # the app is bound to.
           echo "--- which database is the app actually bound to? ---"
-          sudo -n /usr/local/sbin/giftipay-ctl migrate 2>&1 | grep -iE 'datasource|database|migrations' | head -6
+          sudo -n /usr/local/sbin/giftipay-ctl migrate > /tmp/migrate.out 2>&1 || { echo "::error::migrate failed"; cat /tmp/migrate.out; fail=1; }
+          grep -iE 'datasource|database|migrations|already in sync' /tmp/migrate.out | sed -n '1,6p' || sed -n '1,6p' /tmp/migrate.out
           echo "--- readiness probe is token-gated (must refuse an unauthenticated caller) ---"
           RC="$(curl -s -o /tmp/ready -w '%{http_code}' -m 15 "https://$DOMAIN/api/health/ready")"
           echo "  /api/health/ready without a token -> $RC (expect 401)"
           [ "$RC" = "401" ] || { echo "::error::readiness probe is not token-gated"; fail=1; }
           echo "--- the database really has the catalog in it (rendered, not asserted) ---"
-          N="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/product/[a-z0-9-]+' | sort -u | wc -l)"
+          curl -s -m 25 "https://$DOMAIN/" -o /tmp/home.html
+          N="$(grep -oE '/product/[a-z0-9-]+' /tmp/home.html 2>/dev/null | sort -u | wc -l || echo 0)"
           echo "  distinct product links rendered on the homepage: $N"
           [ "$N" -gt 4 ] || { echo "::error::the homepage is not rendering catalog rows from the database"; fail=1; }
           echo "--- isolation: CineFlow is serving its own data at the same moment ---"
