@@ -1,0 +1,126 @@
+name: 04 · Diagnose the Caddy reload failure (read-only)
+
+# The bootstrap ran `set -euo pipefail` and died on `systemctl reload caddy`,
+# so everything after that line — enabling the giftipay units — never happened.
+# This job collects the evidence needed to name the cause. It writes nothing,
+# reloads nothing, and the only privileged call it makes is the scoped
+# `giftipay-ctl status`, which touches giftipay units only.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: giftipay-diagnose
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted]
+    steps:
+      - name: Who we are
+        run: |
+          echo "user   : $(whoami) (uid $(id -u))"
+          echo "groups : $(id -Gn)"
+          echo "-- the runner must NOT be in the giftipay group --"
+          id gift-runner 2>&1 || true
+          echo "-- accounts created by the bootstrap --"
+          id giftipay 2>&1 || echo "user giftipay: MISSING"
+          getent group giftipay 2>&1 || echo "group giftipay: MISSING"
+          id caddy 2>&1 || true
+
+      - name: Caddy service state
+        run: |
+          echo "is-active : $(systemctl is-active caddy 2>&1 || true)"
+          echo "is-enabled: $(systemctl is-enabled caddy 2>&1 || true)"
+          systemctl show caddy \
+            -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus \
+            -p NRestarts -p StateChangeTimestamp -p ExecReload 2>&1 || true
+          echo "-- journal (expected to be unreadable for this user) --"
+          journalctl -u caddy -n 40 --no-pager 2>&1 | tail -40 || true
+
+      - name: Caddy config on disk
+        run: |
+          echo "-- /etc/caddy --"
+          ls -l /etc/caddy 2>&1 | grep -vE '\.bak\.|\.premaint' || true
+          echo "-- /etc/caddy/sites.d --"
+          ls -la /etc/caddy/sites.d 2>&1 || echo "sites.d MISSING"
+          echo "-- is our import line in the Caddyfile? --"
+          grep -n "import /etc/caddy/sites.d" /etc/caddy/Caddyfile 2>&1 || echo "IMPORT LINE ABSENT"
+          echo "-- our vhost file (contains no secrets) --"
+          cat /etc/caddy/sites.d/giftipay.caddy 2>&1 || echo "vhost file NOT READABLE/MISSING"
+
+      - name: Does the combined config still validate?
+        run: |
+          echo "-- caddy validate (as $(whoami)) --"
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -30
+          echo "validate exit: ${PIPESTATUS[0]}"
+          echo "-- caddy adapt (syntax -> JSON) --"
+          caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>/tmp/adapt.err
+          echo "adapt exit: $?"
+          tail -20 /tmp/adapt.err || true
+
+      - name: THE LIKELY CULPRIT — can the caddy user create its log file?
+        run: |
+          echo "-- /var/log/caddy (owner + mode decide whether a NEW file can be created) --"
+          ls -ld /var/log/caddy 2>&1 || echo "/var/log/caddy MISSING"
+          ls -l  /var/log/caddy 2>&1 || true
+          echo
+          echo "-- the log path our vhost asks for --"
+          ls -l /var/log/caddy/giftipay-access.log 2>&1 || echo "giftipay-access.log does not exist yet"
+          echo
+          echo "-- for comparison, CineFlow's, which Caddy already writes --"
+          ls -l /var/log/caddy/cineflow-access.log 2>&1 || echo "cineflow-access.log absent"
+          echo
+          echo "-- other dirs our vhost/units reference --"
+          ls -ld /var/log/giftipay /var/lib/giftipay /opt/giftipay 2>&1 || true
+
+      - name: What config is Caddy actually running right now?
+        run: |
+          echo "-- hosts in the LIVE config (admin API, localhost-only) --"
+          curl -s -m 5 http://127.0.0.1:2019/config/apps/http/servers 2>/dev/null \
+            | grep -o '"host":\[[^]]*\]' || echo "(could not read live config)"
+          echo
+          echo "-- if gift.historyfaster52.sbs is absent, the reload never applied --"
+          echo "-- what answers for the gift host today --"
+          curl -sk -o /dev/null -w "  https -> %{http_code}\n" -m 8 -H "Host: gift.historyfaster52.sbs" https://127.0.0.1/ || true
+          curl -s  -o /dev/null -w "  http  -> %{http_code}\n" -m 8 -H "Host: gift.historyfaster52.sbs" http://127.0.0.1/  || true
+
+      - name: How far did the bootstrap get?
+        run: |
+          echo "-- unit files it should have written --"
+          ls -l /etc/systemd/system/giftipay* 2>&1 || echo "NO giftipay unit files"
+          echo
+          echo "-- enabled/active state (step 9 of the bootstrap never ran) --"
+          for u in giftipay-web.service giftipay-worker.service giftipay-backup.timer giftipay-caddy-guard.path; do
+            printf '  %-34s enabled=%-10s active=%s\n' "$u" \
+              "$(systemctl is-enabled "$u" 2>&1 || true)" \
+              "$(systemctl is-active  "$u" 2>&1 || true)"
+          done
+          echo
+          echo "-- directories --"
+          ls -ld /opt/giftipay /opt/giftipay/staging /opt/giftipay/releases /etc/giftipay 2>&1 || true
+          echo "-- env file: permissions ONLY, never contents --"
+          ls -l /etc/giftipay/ 2>&1 || true
+          echo "-- config backups the bootstrap took --"
+          ls -l /var/backups/giftipay/config/ 2>&1 || true
+          echo "-- control script + sudoers --"
+          ls -l /usr/local/sbin/giftipay-ctl /usr/local/sbin/giftipay-caddy-guard.sh 2>&1 || true
+          echo "-- swap --"
+          free -m | awk '/Swap/{print "  swap: "$2" MB"}'
+
+      - name: The scoped sudo access works
+        run: |
+          echo "-- unrestricted sudo must still be refused --"
+          sudo -n true 2>&1 && echo "::error::runner has blanket sudo — that is wrong" || echo "  blanket sudo: correctly refused"
+          echo "-- the one allowed command --"
+          sudo -n /usr/local/sbin/giftipay-ctl status 2>&1 | head -20 || true
+
+      - name: CineFlow is untouched
+        run: |
+          echo "cineflow is-active : $(systemctl is-active cineflow 2>&1 || true)"
+          echo "cineflow MainPID   : $(systemctl show cineflow -p MainPID --value 2>&1 || true)"
+          echo "cineflow since     : $(systemctl show cineflow -p ActiveEnterTimestamp --value 2>&1 || true)"
+          curl -s -o /dev/null -w "movie.historyfaster52.sbs -> %{http_code}\n" -m 10 https://movie.historyfaster52.sbs/ || true
