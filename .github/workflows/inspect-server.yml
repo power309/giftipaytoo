@@ -1,8 +1,6 @@
 name: 00 · Inspect server (read-only)
 
-# Manual only. This workflow NEVER writes, installs, restarts or stops anything.
-# It exists so the deployment can be planned against the server's real state
-# without touching the co-hosted movie project.
+# Manual only. NEVER writes, installs, restarts or stops anything.
 on:
   workflow_dispatch:
 
@@ -15,174 +13,90 @@ jobs:
     runs-on: [self-hosted]
     timeout-minutes: 12
     steps:
-      - name: Runner identity
+      - name: Identity and privileges
         run: |
-          echo "::group::runner"
-          echo "RUNNER_NAME   = ${RUNNER_NAME:-?}"
-          echo "RUNNER_OS     = ${RUNNER_OS:-?}"
-          echo "RUNNER_ARCH   = ${RUNNER_ARCH:-?}"
-          echo "workdir       = ${RUNNER_WORKSPACE:-?}"
-          echo "hostname      = $(hostname 2>/dev/null)"
-          echo "whoami        = $(whoami 2>/dev/null)"
-          echo "uid/gid       = $(id 2>/dev/null)"
-          echo "pwd           = $(pwd)"
-          echo "::endgroup::"
+          echo "runner=${RUNNER_NAME} user=$(whoami) groups=$(id -Gn)"
+          echo "sudo(n): $(sudo -n true 2>/dev/null && echo YES || echo NO)"
+          echo "--- does a giftipay user/group already exist? ---"
+          id giftipay 2>/dev/null || echo "user 'giftipay': does not exist"
+          getent group caddy postgres 2>/dev/null || true
 
-      - name: Runner labels and all runner services
+      - name: Caddy layout (config structure, secrets redacted)
         run: |
-          echo "::group::runner services"
-          systemctl list-units --type=service --all 2>/dev/null | grep -i "actions.runner" || echo "(no actions.runner services visible)"
-          echo "--- runner install dirs ---"
-          ls -d /home/*/actions-runner* /opt/actions-runner* /srv/actions-runner* 2>/dev/null || echo "(none found in common paths)"
-          echo "--- .runner config (labels; no tokens) ---"
-          for f in /home/*/actions-runner*/.runner /opt/actions-runner*/.runner /srv/actions-runner*/.runner; do
-            [ -f "$f" ] && { echo "== $f"; sed -e 's/"[a-zA-Z]*[Tt]oken":"[^"]*"/"token":"<redacted>"/g' "$f" 2>/dev/null | head -30; }
-          done || true
+          echo "::group::caddy binary + service"
+          caddy version 2>/dev/null || echo "(caddy not on PATH for this user)"
+          systemctl cat caddy.service 2>/dev/null | grep -vE "^\s*#" | head -30 || echo "(cannot read unit)"
           echo "::endgroup::"
-
-      - name: OS, resources, uptime
-        run: |
-          echo "::group::system"
-          cat /etc/os-release 2>/dev/null | head -4
-          uname -a
-          uptime
-          echo "--- memory ---"; free -h 2>/dev/null
-          echo "--- disk ---";  df -hT 2>/dev/null | grep -vE "tmpfs|overlay" | head -15
-          echo "--- cpu ---"; nproc
-          echo "::endgroup::"
-
-      - name: Privilege check (non-interactive only)
-        run: |
-          echo "::group::sudo"
-          if sudo -n true 2>/dev/null; then
-            echo "passwordless sudo: YES"
-            sudo -n -l 2>/dev/null | head -20
+          echo "::group::caddy config files"
+          ls -la /etc/caddy/ 2>/dev/null || echo "(cannot list /etc/caddy)"
+          echo "--- import directives / site blocks (values redacted) ---"
+          if [ -r /etc/caddy/Caddyfile ]; then
+            sed -E 's/(password|hash|token|secret|key)[[:space:]]+\S+/\1 <redacted>/Ig' /etc/caddy/Caddyfile | head -80
           else
-            echo "passwordless sudo: NO (deployment must run as $(whoami) or be granted sudo)"
+            echo "(/etc/caddy/Caddyfile not readable by $(whoami))"
           fi
+          echo "--- any sites/conf.d style dir ---"
+          ls -la /etc/caddy/conf.d /etc/caddy/sites 2>/dev/null || echo "(no conf.d/sites dir)"
+          echo "::endgroup::"
+          echo "::group::what caddy serves right now (admin API is localhost-only)"
+          curl -s -m 5 http://127.0.0.1:2019/config/apps/http/servers 2>/dev/null \
+            | head -c 2500 | sed -E 's/("password"|"hash"|"token"|"secret")[[:space:]]*:[[:space:]]*"[^"]*"/\1:"<redacted>"/Ig' \
+            || echo "(admin API not reachable)"
+          echo
           echo "::endgroup::"
 
-      - name: Running services
+      - name: CineFlow footprint (read-only; nothing touched)
         run: |
-          echo "::group::services"
-          systemctl list-units --type=service --state=running 2>/dev/null | head -60 || echo "(systemctl unavailable)"
-          echo "::endgroup::"
-
-      - name: Listening ports (who owns what)
-        run: |
-          echo "::group::ports"
-          (sudo -n ss -tlnp 2>/dev/null || ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | head -60
-          echo "::endgroup::"
-
-      - name: Web server configuration
-        run: |
-          echo "::group::nginx"
-          nginx -v 2>&1 || echo "(nginx not installed)"
-          echo "--- sites-enabled ---"
-          ls -la /etc/nginx/sites-enabled/ 2>/dev/null || echo "(no sites-enabled)"
-          echo "--- conf.d ---"
-          ls -la /etc/nginx/conf.d/ 2>/dev/null || echo "(no conf.d)"
-          echo "--- server_name / listen directives currently configured ---"
-          grep -RhoE "^[[:space:]]*(server_name|listen)[[:space:]]+[^;]+;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sed 's/^[[:space:]]*//' | sort -u | head -40 || true
-          echo "--- upstream/proxy_pass targets (shows movie app's internal ports) ---"
-          grep -RhoE "proxy_pass[[:space:]]+[^;]+;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sort -u | head -20 || true
-          echo "::endgroup::"
-          echo "::group::apache"
-          apache2 -v 2>&1 | head -2 || httpd -v 2>&1 | head -2 || echo "(apache not installed)"
-          ls -la /etc/apache2/sites-enabled/ 2>/dev/null || echo "(no apache sites-enabled)"
-          echo "::endgroup::"
-
-      - name: Docker
-        run: |
-          echo "::group::docker"
-          docker --version 2>/dev/null || echo "(docker not installed)"
-          (sudo -n docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null) | head -30 || echo "(cannot list containers)"
-          echo "--- networks ---"
-          (sudo -n docker network ls 2>/dev/null || docker network ls 2>/dev/null) | head -15 || true
-          echo "--- compose projects on disk ---"
-          ls -d /opt/*/docker-compose.y*ml /srv/*/docker-compose.y*ml /var/www/*/docker-compose.y*ml /home/*/*/docker-compose.y*ml 2>/dev/null || echo "(none found)"
-          echo "::endgroup::"
-
-      - name: Databases present (names only, never contents)
-        run: |
-          echo "::group::postgres"
-          (psql --version 2>/dev/null) || echo "(psql client not installed)"
-          systemctl is-active postgresql 2>/dev/null || echo "postgresql service: not active/absent"
-          (sudo -n -u postgres psql -tAc "select datname from pg_database where datistemplate=false;" 2>/dev/null && echo "(listed as postgres superuser)") || echo "(cannot enumerate databases without sudo -u postgres)"
-          (sudo -n -u postgres psql -tAc "select rolname from pg_roles where rolcanlogin;" 2>/dev/null) || true
-          echo "--- postgres listening config ---"
-          (sudo -n grep -hE "^[[:space:]]*(port|listen_addresses)" /etc/postgresql/*/main/postgresql.conf 2>/dev/null) || true
-          echo "::endgroup::"
-          echo "::group::mysql/mariadb"
-          (mysql --version 2>/dev/null) || echo "(mysql client not installed)"
-          systemctl is-active mysql mariadb 2>/dev/null || echo "mysql/mariadb: not active/absent"
-          echo "::endgroup::"
-          echo "::group::redis"
-          (redis-server --version 2>/dev/null) || echo "(redis not installed)"
-          systemctl is-active redis redis-server 2>/dev/null || true
-          echo "::endgroup::"
-
-      - name: Existing project directories (paths + ownership only)
-        run: |
-          echo "::group::projects"
-          for d in /var/www /srv /opt /home; do
-            echo "== $d"
-            ls -la "$d" 2>/dev/null | head -25
+          echo "::group::cineflow units"
+          for u in cineflow.service cineflow-backup.service cineflow-backup.timer cineflow-log-retention.service cineflow-log-retention.timer; do
+            echo "== $u"
+            systemctl show "$u" -p Description -p User -p Group -p WorkingDirectory -p ExecStart -p Environment -p EnvironmentFile 2>/dev/null \
+              | sed -E 's/(PASSWORD|SECRET|TOKEN|KEY|DSN|URL)=[^ ]*/\1=<redacted>/Ig' | head -12
           done
-          echo "--- any .env files (PATHS AND PERMISSIONS ONLY — contents never printed) ---"
-          find /var/www /srv /opt /home -maxdepth 4 -name ".env*" -type f 2>/dev/null | head -20 | while read -r f; do
-            echo "$(stat -c '%A %U:%G %s bytes' "$f" 2>/dev/null)  $f"
-          done || true
+          echo "::endgroup::"
+          echo "::group::cineflow dirs (paths only)"
+          ls -la /opt/ai.Company 2>/dev/null | head -20 || echo "(not readable by $(whoami) — good, it is isolated)"
+          ls -la /var/www/cineflow-maint 2>/dev/null | head -10 || true
           echo "::endgroup::"
 
-      - name: Node / PM2 / process managers
+      - name: PostgreSQL access model
         run: |
-          echo "::group::node"
-          node --version 2>/dev/null || echo "(node not installed)"
-          npm --version 2>/dev/null || true
-          pm2 --version 2>/dev/null && (pm2 list 2>/dev/null | head -20) || echo "(pm2 not installed)"
-          echo "--- app-like systemd units ---"
-          systemctl list-units --type=service --all 2>/dev/null | grep -iE "node|next|movie|film|cinema|app|web|gift|laravel|php|gunicorn|uwsgi" | head -25 || echo "(none matched)"
+          echo "::group::pg"
+          psql --version
+          echo "--- can gift-runner connect at all? ---"
+          PGCONNECT_TIMEOUT=5 psql -h 127.0.0.1 -U "$(whoami)" -d postgres -tAc "select current_user" 2>&1 | head -3
+          echo "--- hba auth methods (no addresses/users leaked beyond method) ---"
+          (sudo -n cat /etc/postgresql/*/main/pg_hba.conf 2>/dev/null | grep -vE "^\s*#|^\s*$" | head -15) \
+            || echo "(pg_hba.conf needs root — expected)"
+          echo "--- cluster info ---"
+          ls -1 /etc/postgresql/ 2>/dev/null || true
           echo "::endgroup::"
 
-      - name: TLS certificates
+      - name: Ports free for the gift app
         run: |
-          echo "::group::certs"
-          certbot --version 2>/dev/null || echo "(certbot not installed)"
-          (sudo -n certbot certificates 2>/dev/null | grep -E "Certificate Name|Domains|Expiry|VALID|INVALID") || echo "(cannot run certbot certificates without sudo)"
-          echo "--- letsencrypt live dirs ---"
-          (sudo -n ls -1 /etc/letsencrypt/live 2>/dev/null || ls -1 /etc/letsencrypt/live 2>/dev/null) || echo "(no /etc/letsencrypt/live readable)"
-          echo "--- renewal timer ---"
-          systemctl list-timers 2>/dev/null | grep -iE "certbot|renew" || echo "(no certbot timer visible)"
-          echo "::endgroup::"
-
-      - name: Firewall and scheduled jobs
-        run: |
-          echo "::group::firewall"
-          (sudo -n ufw status verbose 2>/dev/null) || (ufw status 2>/dev/null) || echo "(ufw unavailable/needs sudo)"
-          (sudo -n iptables -S 2>/dev/null | head -20) || true
-          echo "::endgroup::"
-          echo "::group::cron and timers"
-          (sudo -n ls -la /etc/cron.d/ 2>/dev/null) || ls -la /etc/cron.d/ 2>/dev/null || true
-          crontab -l 2>/dev/null || echo "(no crontab for $(whoami))"
-          systemctl list-timers --all 2>/dev/null | head -20 || true
-          echo "::endgroup::"
-
-      - name: What answers on the public interfaces right now
-        run: |
-          echo "::group::http probe (localhost only)"
-          for p in 80 443; do
-            echo "--- localhost:$p ---"
-            curl -sk -o /dev/null -w "  status=%{http_code} time=%{time_total}s\n" -m 8 "http://127.0.0.1:$p/" 2>/dev/null || echo "  (no answer)"
+          echo "::group::port availability"
+          for p in 4020 4021 4030; do
+            if (ss -tln 2>/dev/null | grep -q ":$p "); then echo "port $p: IN USE"; else echo "port $p: free"; fi
           done
-          echo "--- movie site vhost response (by Host header, if configured) ---"
-          grep -RhoE "server_name[[:space:]]+[^;]+;" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sed 's/server_name//;s/;//' | tr ' ' '\n' | grep -vE "^$|_|default" | sort -u | head -6 | while read -r h; do
-            code=$(curl -sk -o /dev/null -w "%{http_code}" -m 8 -H "Host: $h" "http://127.0.0.1/" 2>/dev/null)
-            echo "  Host: $h -> $code"
-          done || true
+          echo "--- full listen table for reference ---"
+          ss -tln 2>/dev/null | head -20
           echo "::endgroup::"
 
-      - name: Summary
+      - name: DNS and current answer for the target domain
         run: |
-          echo "Inspection complete on runner '${RUNNER_NAME:-?}' / host $(hostname)."
-          echo "No files were written, no services were started, stopped or restarted."
+          echo "::group::dns"
+          getent hosts gift.historyfaster52.sbs || echo "(no A record resolved from server)"
+          echo "server public IP:"; curl -s -m 6 https://api.ipify.org 2>/dev/null || echo "(cannot reach ipify)"
+          echo
+          echo "::endgroup::"
+          echo "::group::what answers for the gift domain today"
+          curl -sk -o /dev/null -w "  https via Host header -> %{http_code}\n" -m 8 -H "Host: gift.historyfaster52.sbs" https://127.0.0.1/ 2>/dev/null || echo "  (no answer)"
+          curl -s  -o /dev/null -w "  http  via Host header -> %{http_code}\n" -m 8 -H "Host: gift.historyfaster52.sbs" http://127.0.0.1/  2>/dev/null || echo "  (no answer)"
+          echo "::endgroup::"
+
+      - name: Resources and toolchain
+        run: |
+          echo "node=$(node -v) npm=$(npm -v)"
+          free -m | head -2
+          df -h / | tail -1
+          echo "swap: $(free -m | awk '/Swap/{print $2}') MB"
