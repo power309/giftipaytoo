@@ -12,7 +12,6 @@ export type ActionResult<T = undefined> = { ok: true; data?: T; message?: string
 async function uniqueSlug(base: string, ignoreId?: string): Promise<string> {
   let slug = slugify(base) || `برند-${Date.now()}`;
   let n = 1;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const exists = await db.brand.findFirst({ where: { slug, NOT: ignoreId ? { id: ignoreId } : undefined } });
     if (!exists) return slug;

@@ -50,7 +50,6 @@ export default async function BlogPostPage({ params }: Props) {
 
   return (
     <div className="container-page max-w-3xl space-y-6 py-6">
-      {/* eslint-disable-next-line react/no-danger */}
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(articleJsonLd) }} />
 
       <Breadcrumbs items={[{ label: 'مجله', href: '/blog' }, { label: post.titleFa }]} />

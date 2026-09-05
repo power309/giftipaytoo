@@ -50,7 +50,6 @@ export function serializeJsonLd(data: unknown): string {
 export function JsonLd({ data }: { data: unknown }): React.ReactElement {
   return React.createElement('script', {
     type: 'application/ld+json',
-    // eslint-disable-next-line react/no-danger
     dangerouslySetInnerHTML: { __html: serializeJsonLd(data) },
   });
 }

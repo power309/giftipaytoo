@@ -20,7 +20,6 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    // eslint-disable-next-line no-console
     console.error('global error boundary', { message: error.message, digest: error.digest });
   }, [error]);
 

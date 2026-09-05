@@ -13,8 +13,6 @@ import { getSessionUser } from '@/server/auth/session';
  * front to disable the control with a visible message instead.
  */
 
-const CART_SPECIFIER = '@/server/cart';
-
 type CartModule = {
   addToCart?: (input: {
     variantId: string;

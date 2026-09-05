@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { db } from '@/server/db';
 import { clientIp } from '@/server/auth/session';
 import { enforceRateLimit, RateLimitError } from '@/server/rate-limit';
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * and fails open (an empty list) rather than 500ing, so a DB hiccup here
  * degrades to "no redirects applied this minute", never a broken page.
  */
-export async function GET(req: NextRequest) {
+export async function GET() {
   const ip = await clientIp();
   try {
     await enforceRateLimit('api.generic', ip);

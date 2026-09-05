@@ -444,8 +444,10 @@ function MediaField({
     <div className="space-y-2">
       <p className="text-xs font-medium text-fg-muted">{label}</p>
       {path ? (
-        // eslint-disable-next-line @next/next/no-img-element
         <div className="flex items-center gap-2">
+          {/* A preview of an arbitrary uploaded path at a fixed 56px; next/image
+              would add an optimisation round-trip for no benefit here. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={path} alt="" className="size-14 rounded-lg border border-border-base object-cover" />
           <Button type="button" size="xs" variant="ghost" onClick={() => onChange(null)}>
             حذف

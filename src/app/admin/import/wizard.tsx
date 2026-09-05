@@ -9,8 +9,7 @@ import { Panel } from '@/components/admin/kit';
 import { PRODUCT_IMPORT_FIELDS, type ColumnMapping, type ImportPreviewSummary } from './types';
 import { parseImportFile, previewProductImport, runProductImport, type ParsedFile, type RunImportResult } from './actions';
 
-const STEPS = ['upload', 'mapping', 'preview', 'result'] as const;
-type Step = (typeof STEPS)[number];
+type Step = 'upload' | 'mapping' | 'preview' | 'result';
 
 function guessMapping(headers: string[]): ColumnMapping {
   const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '');

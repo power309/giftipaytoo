@@ -15,25 +15,8 @@ export { deliveryLabel, SORT_LABELS };
 export type { SortKey, ProductFilters, FacetOption, ProductListFacets };
 
 /**
- * Storefront data-access layer.
+ * Storefront data-access layer. Reads the catalog directly through Prisma.
  *
- * Another agent owns `src/server/catalog/**` and `src/server/pricing-service.ts`
- * (query/search/facet/pricing logic). Those modules may not exist yet while this
- * page is being built. Every exported function here FIRST tries to load the
- * equivalent from that module (via a non-literal specifier so bundlers cannot
- * fail the build on a file that is not there yet) and falls back to a complete,
- * correct, direct Prisma implementation when it is unavailable. The fallback is
- * never a stub — every route in `(storefront)` works fully against it.
- *
- * NOTE for the coordinator: because the specifier is intentionally non-literal
- * (to dodge a hard "module not found" at build time), bundlers may treat the
- * import as fully dynamic and never actually resolve `@/server/catalog/queries`
- * at runtime even after that file lands. Once it exists, prefer replacing the
- * `loadModule(...)` calls below with a normal static `import` + try/catch, or a
- * thin re-export, so the real implementation is actually picked up.
- */
-
-/**
  * NOTE ON `@/server/catalog/queries`
  * ---------------------------------
  * That module implements the same catalog reads with SQL-level filtering and
@@ -55,28 +38,6 @@ export type { SortKey, ProductFilters, FacetOption, ProductListFacets };
  * variants); a much larger catalog should push that work into SQL through the
  * mapping layer described above.
  */
-
-const CATALOG_SPECIFIER = '@/server/catalog/queries';
-
-/**
- * Resolves the optional catalog module.
- *
- * The specifier must be a string literal: a bundler cannot statically analyse
- * `import(variable)`, so a variable specifier would fail at runtime and silently
- * strand every caller on the direct-Prisma fallback below. The import is
- * evaluated once and memoised.
- */
-const catalogModule: Promise<Record<string, unknown> | null> = import(
-  '@/server/catalog/queries'
-)
-  .then((m) => m as unknown as Record<string, unknown>)
-  .catch(() => null);
-
-async function loadModule<T = Record<string, unknown>>(specifier: string): Promise<T | null> {
-  if (specifier !== CATALOG_SPECIFIER) return null;
-  return (await catalogModule) as T | null;
-}
-
 
 // ── Shared filter/sort/pagination contracts ─────────────────────────────
 // (SortKey, SORT_LABELS, ProductFilters, FacetOption, ProductListFacets,

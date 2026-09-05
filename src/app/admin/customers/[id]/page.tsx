@@ -4,7 +4,7 @@ import { requirePermission } from '@/server/auth/guard';
 import { db } from '@/server/db';
 import { PageHeader, Panel, Money, StatusPill, DemoBadge } from '@/components/admin/kit';
 import { Badge, EmptyState } from '@/components/ui';
-import { formatJalali, timeAgoFa, toPersianDigits } from '@/lib/persian';
+import { formatJalali, toPersianDigits } from '@/lib/persian';
 import { formatToman } from '@/lib/money';
 import { customerName } from '../_lib';
 import { CustomerDetailClient, SessionsList } from './client';

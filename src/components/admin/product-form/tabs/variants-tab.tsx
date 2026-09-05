@@ -261,12 +261,22 @@ function VariantGenerator({
   const currency = refData.currencies.find((c) => c.code === currencyCode);
   const rate = refData.exchangeRates.find((r) => r.currencyCode === currencyCode);
 
-  const denominations = denomText
-    .split(',')
-    .map((s) => parsePersianNumber(s.trim()))
-    .filter((n): n is number => n !== null && n > 0);
+  // Both are memoised: they feed the `preview` useMemo below, and a fresh array
+  // on every render would make that memo recompute every time.
+  const denominations = React.useMemo(
+    () =>
+      denomText
+        .split(',')
+        .map((s) => parsePersianNumber(s.trim()))
+        .filter((n): n is number => n !== null && n > 0),
+    [denomText],
+  );
 
-  const regions = selectedRegionIds.size > 0 ? refData.regions.filter((r) => selectedRegionIds.has(r.id)) : [null];
+  const regions = React.useMemo(
+    () =>
+      selectedRegionIds.size > 0 ? refData.regions.filter((r) => selectedRegionIds.has(r.id)) : [null],
+    [selectedRegionIds, refData.regions],
+  );
 
   const preview = React.useMemo(() => {
     if (!currency) return [];

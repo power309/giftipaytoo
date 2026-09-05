@@ -1,9 +1,9 @@
 'use server';
 
-import type { Coupon, ProductVariant, Product } from '@prisma/client';
+import type { Coupon } from '@prisma/client';
 import { db } from './db';
 import { logger } from '@/lib/logger';
-import { computeTotals, couponDiscount, type CouponInput } from '@/lib/pricing';
+import { computeTotals, type CouponInput } from '@/lib/pricing';
 import { assertToman } from '@/lib/money';
 import { getSessionUser, getOrCreateCartKey } from './auth/session';
 import { getSetting } from './settings';

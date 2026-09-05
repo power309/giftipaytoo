@@ -3,7 +3,6 @@
 import { z } from 'zod';
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import { db } from '@/server/db';
 import { assertPermission } from '@/server/auth/guard';
 import { audit } from '@/server/audit';
 

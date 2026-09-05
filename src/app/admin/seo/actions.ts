@@ -32,7 +32,7 @@ const metaSchema = z.object({ defaultTitle: z.string().min(1).max(200), defaultD
 export async function saveSeoDefaults(input: z.infer<typeof metaSchema>): Promise<ActionResult> {
   const parsed = metaSchema.safeParse(input);
   if (!parsed.success) return fail('ورودی نامعتبر است.');
-  const user = await assertPermission('seo.manage');
+  await assertPermission('seo.manage');
 
   try {
     const { setSetting } = await import('@/server/settings');

@@ -22,6 +22,14 @@ import {
  * `queueStats()` and worker logs) instead of taking the whole process down.
  */
 
+/**
+ * The registry is deliberately heterogeneous: each handler declares its own
+ * payload shape, and the worker hands it whatever JSON the job row carried.
+ * `unknown` cannot express that — under `strictFunctionTypes` a
+ * `(p: FulfillPayload) => …` is not assignable to `(p: unknown) => …` — so the
+ * parameter is `any` here and every handler validates its own payload.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type JobHandler = (payload: any) => Promise<void>;
 
 const registry: Record<string, JobHandler> = {};
