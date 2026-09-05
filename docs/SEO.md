@@ -103,17 +103,23 @@ products:
   `ARCHIVED`, or one whose `publishAt` is still in the future, or whose
   `expiresAt` has already passed), 40,000 per file
 
-`src/app/robots.ts` lists every one of those URLs under a `Sitemap:` line.
-**Multiple `Sitemap:` lines in `robots.txt` is Google's and Bing's
-documented, fully-supported alternative to a sitemap index file** — so
-crawler discovery works exactly the same as a real index would, without
-fighting the framework's file convention. This is the trade-off worth being
-explicit about: it costs nothing functionally, but a tool that specifically
-expects to fetch `/sitemap.xml` and see `<sitemapindex>` (some manual SEO
-audit checklists do) will instead get a **404** at that exact URL — Next's
-own generated route for a `generateSitemaps()`-based sitemap only exists at
-`/sitemap/<id>.xml`, not at the bare `/sitemap.xml` — and needs to be
-pointed at `robots.txt`'s `Sitemap:` lines instead.
+Discovery works two ways, and both are authoritative:
+
+1. `src/app/robots.ts` lists every one of those URLs under its own
+   `Sitemap:` line. **Multiple `Sitemap:` lines in `robots.txt` is Google's
+   and Bing's documented, fully-supported alternative to a sitemap index
+   file.**
+2. `src/app/sitemap.xml/route.ts` serves a real `<sitemapindex>` at the
+   conventional `/sitemap.xml`, pointing at the same children.
+
+The second exists because Next's `sitemap.ts` convention can only emit a
+`<urlset>`, and with `generateSitemaps()` it serves those at
+`/sitemap/<id>.xml` — so the bare `/sitemap.xml` used to 404, which reads as
+"no sitemap" to any tool or person that fetches it directly. A plain route
+handler sits beside the file convention rather than replacing it: the child
+sitemaps stay authoritative and the index only points at them. Both the
+index and `robots.ts` build their list from `STATIC_SECTION_IDS` and
+`getProductSitemapPageCount()`, so the two can never disagree.
 
 ## 5. The redirect mechanism and its trade-off
 
@@ -203,7 +209,7 @@ against user input.
 - [ ] Verify `/robots.txt` in production does **not** carry a leftover
       `Disallow: /` from a staging environment — `APP_ENV` mixups here are
       the single most common way a site accidentally de-indexes itself.
-- [ ] Submit `/robots.txt`'s `Sitemap:` URLs (not a guessed `/sitemap.xml`)
+- [ ] Submit `/sitemap.xml` (a real `<sitemapindex>`), or `/robots.txt`'s `Sitemap:` lines — they list the same children
       in Google Search Console / Bing Webmaster Tools.
 - [ ] Spot-check three product pages' JSON-LD in Google's Rich Results Test
       — confirm `AggregateRating` is present only on products that actually

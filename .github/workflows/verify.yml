@@ -82,7 +82,13 @@ jobs:
           check "/track"            200
           check "/api/health"       200 '"status"'
           check "/robots.txt"       200 "Disallow: /admin"
-          check "/sitemap.xml"      200
+          check "/sitemap.xml"      200 "<sitemapindex"
+          # every child sitemap the index and robots.txt advertise must resolve
+          for sm in $(curl -s -m 25 "https://$DOMAIN/sitemap.xml" | grep -oE '<loc>[^<]+</loc>' | sed -E 's|</?loc>||g'); do
+            c="$(curl -s -o /dev/null -w '%{http_code}' -m 25 "$sm")"
+            printf '  %-52s %s\n' "${sm#https://$DOMAIN}" "$c"
+            [ "$c" = "200" ] || fail=1
+          done
           # a real product page, discovered from the live homepage
           SLUG="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/product/[a-z0-9-]+' | head -1)"
           echo "  discovered product: ${SLUG:-<none>}"
