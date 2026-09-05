@@ -1,0 +1,115 @@
+name: 03 · Stage bootstrap script for a root operator
+
+# One-time helper. The runner user (`gift-runner`) has no sudo, so it cannot run
+# the bootstrap itself — a human with root has to. This job's whole job is to put
+# a verified copy of deploy/bootstrap-giftipay.sh somewhere that operator can
+# reach it, and to print the commit and checksum so they can confirm they are
+# running the file this repository actually contains.
+#
+# It writes exactly one path, inside the runner user's own home. It does not use
+# sudo, does not touch CineFlow, and does not execute the script.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: giftipay-stage-bootstrap
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    runs-on: [self-hosted]
+    env:
+      SRC: deploy/bootstrap-giftipay.sh
+      DEST: /home/gift-runner/bootstrap-giftipay.sh
+
+    steps:
+      - name: Check out the dispatched commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Report the source commit
+        run: |
+          echo "repository : ${GITHUB_REPOSITORY}"
+          echo "ref        : ${GITHUB_REF}"
+          echo "commit SHA : ${GITHUB_SHA}"
+          echo "commit     : $(git log -1 --pretty='%h %s')"
+          echo "last change to ${SRC}:"
+          git log -1 --pretty='  %H%n  %ci%n  %s' -- "${SRC}"
+
+      - name: Verify the source file before copying anything
+        run: |
+          set -euo pipefail
+          test -f "${SRC}" || { echo "::error::${SRC} is not in this commit"; exit 1; }
+          # Refuse to stage a script that will not even parse.
+          bash -n "${SRC}"
+          echo "syntax   : OK (bash -n)"
+          echo "size     : $(stat -c%s "${SRC}") bytes"
+          echo "sha256   : $(sha256sum "${SRC}" | cut -d' ' -f1)"
+
+      - name: Confirm the destination is ours and not CineFlow's
+        run: |
+          set -euo pipefail
+          echo "running as: $(whoami) (uid $(id -u))"
+          case "${DEST}" in
+            /home/gift-runner/*) : ;;
+            *) echo "::error::refusing to write outside /home/gift-runner"; exit 1 ;;
+          esac
+          # Nothing under /opt/ai.Company, /etc, or any CineFlow path is touched.
+          if [ -e "${DEST}" ]; then
+            backup="${DEST}.replaced-$(date -u +%Y%m%d%H%M%S)"
+            cp -p "${DEST}" "${backup}"
+            echo "note: a file was already there; previous copy kept at ${backup}"
+          else
+            echo "destination is free"
+          fi
+
+      - name: Install the script
+        run: |
+          set -euo pipefail
+          install -m 0755 "${SRC}" "${DEST}"
+          echo "installed ${DEST}"
+
+      - name: Verify the installed copy matches the commit
+        run: |
+          set -euo pipefail
+          src_sum="$(sha256sum "${SRC}"  | cut -d' ' -f1)"
+          dst_sum="$(sha256sum "${DEST}" | cut -d' ' -f1)"
+          if [ "${src_sum}" != "${dst_sum}" ]; then
+            echo "::error::checksum mismatch after copy (src ${src_sum} != dest ${dst_sum})"
+            exit 1
+          fi
+          echo "checksums match"
+          ls -l "${DEST}"
+          echo "---- first 5 lines of the staged file ----"
+          head -5 "${DEST}"
+
+      - name: Summary for the operator
+        run: |
+          set -euo pipefail
+          sum="$(sha256sum "${DEST}" | cut -d' ' -f1)"
+          {
+            echo "### Bootstrap script staged"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source commit | \`${GITHUB_SHA}\` |"
+            echo "| Source path | \`${SRC}\` |"
+            echo "| Staged at | \`${DEST}\` |"
+            echo "| Mode | \`$(stat -c '%a %U:%G' "${DEST}")\` |"
+            echo "| Size | $(stat -c%s "${DEST}") bytes |"
+            echo "| SHA-256 | \`${sum}\` |"
+            echo
+            echo "The script was **not** executed. To run it as root:"
+            echo
+            echo '```'
+            echo "sha256sum ${DEST}   # expect ${sum}"
+            echo "sudo install -m 0755 -o root -g root ${DEST} /root/bootstrap-giftipay.sh"
+            echo "sudo bash /root/bootstrap-giftipay.sh"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "SHA-256: ${sum}"
