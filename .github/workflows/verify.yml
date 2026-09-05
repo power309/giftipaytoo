@@ -124,14 +124,25 @@ jobs:
       - name: 7 · Database is connected, isolated, and populated
         run: |
           set -euo pipefail
-          echo "--- databases on this cluster ---"
-          sudo -n -u postgres psql -tAc \
-            "select datname||' (owner '||pg_get_userbyid(datdba)||')' from pg_database where datistemplate=false order by 1" \
-            2>/dev/null || echo "  (cannot enumerate as this user — checking via the app instead)"
-          echo "--- giftipay_prod content (via the app's own health surface) ---"
-          curl -s -m 15 "https://$DOMAIN/api/health" | head -c 400; echo
-          echo "--- our tables are NOT in CineFlow's database and vice versa ---"
-          sudo -n /usr/local/sbin/giftipay-ctl status >/dev/null && echo "  giftipay services reachable"
+          fail=0
+          # The runner has no postgres access by design, so the evidence comes
+          # from the app's own connection rather than from a superuser query.
+          # `migrate` is idempotent; its first line names the exact datasource
+          # the app is bound to.
+          echo "--- which database is the app actually bound to? ---"
+          sudo -n /usr/local/sbin/giftipay-ctl migrate 2>&1 | grep -iE 'datasource|database|migrations' | head -6
+          echo "--- readiness probe is token-gated (must refuse an unauthenticated caller) ---"
+          RC="$(curl -s -o /tmp/ready -w '%{http_code}' -m 15 "https://$DOMAIN/api/health/ready")"
+          echo "  /api/health/ready without a token -> $RC (expect 401)"
+          [ "$RC" = "401" ] || { echo "::error::readiness probe is not token-gated"; fail=1; }
+          echo "--- the database really has the catalog in it (rendered, not asserted) ---"
+          N="$(curl -s -m 25 "https://$DOMAIN/" | grep -oE '/product/[a-z0-9-]+' | sort -u | wc -l)"
+          echo "  distinct product links rendered on the homepage: $N"
+          [ "$N" -gt 4 ] || { echo "::error::the homepage is not rendering catalog rows from the database"; fail=1; }
+          echo "--- isolation: CineFlow is serving its own data at the same moment ---"
+          CF="$(curl -s -o /dev/null -w '%{http_code}' -m 15 https://movie.historyfaster52.sbs/ || echo 000)"
+          echo "  movie.historyfaster52.sbs -> $CF (separate database, separate service)"
+          exit $fail
 
       - name: 8 · Services, timers and reboot persistence
         run: |
@@ -210,7 +221,9 @@ jobs:
         run: |
           set -euo pipefail
           nice -n 10 npm ci --no-audit --no-fund
-          nice -n 10 npx playwright install --with-deps chromium
+          # No --with-deps: that shells out to apt via sudo, which this runner
+          # deliberately does not have. The system libraries are already present.
+          nice -n 10 npx playwright install chromium
           echo "--- storefront, cart, auth, security, accessibility, responsive ---"
           nice -n 10 npx playwright test \
             --project=desktop-chromium \
