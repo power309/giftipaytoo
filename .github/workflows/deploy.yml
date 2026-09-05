@@ -100,6 +100,16 @@ jobs:
               --exclude='./test-results' --exclude='./playwright-report' \
               -cf - . | tar -xf - -C "$REL"
           echo "$GITHUB_SHA" > "$REL/RELEASE_SHA"
+
+          # Admin image uploads land in public/media/uploads/YYYY/MM. That path
+          # lives inside the release, so without this every uploaded image would
+          # disappear at the next deploy. Point it at the app's persistent data
+          # dir instead; the app (running as giftipay, which has DATA_DIR in its
+          # systemd ReadWritePaths) creates the dated subdirs itself.
+          rm -rf "$REL/public/media/uploads"
+          ln -s /var/lib/giftipay/uploads "$REL/public/media/uploads"
+          echo "  uploads -> $(readlink "$REL/public/media/uploads") (persists across releases)"
+
           du -sh "$REL" | sed 's/^/  release size: /'
           echo "release=$REL" >> "$GITHUB_OUTPUT"
 
@@ -132,6 +142,19 @@ jobs:
           echo "::error::app did not become healthy"
           sudo -n /usr/local/sbin/giftipay-ctl logs 120 || true
           exit 1
+
+      - name: The app must listen on loopback only
+        run: |
+          set -euo pipefail
+          echo "--- listeners on ${APP_PORT} ---"
+          ss -tlnp 2>/dev/null | grep ":${APP_PORT} " || ss -tln | grep ":${APP_PORT} " || true
+          if ss -tln | grep -qE "0\.0\.0\.0:${APP_PORT}|\[::\]:${APP_PORT}|\*:${APP_PORT}"; then
+            echo "::error::${APP_PORT} is bound on a public interface — it must be 127.0.0.1 only"
+            exit 1
+          fi
+          ss -tln | grep -q "127.0.0.1:${APP_PORT}" \
+            || { echo "::error::nothing is listening on 127.0.0.1:${APP_PORT}"; exit 1; }
+          echo "127.0.0.1:${APP_PORT} only — correct."
 
       - name: Prune old releases
         run: sudo -n /usr/local/sbin/giftipay-ctl prune "${{ inputs.keep_releases }}"
