@@ -121,3 +121,55 @@ caddy-guard helper, which validates and reloads the same way.
 `/var/log/caddy`, a directory CineFlow also logs into. Only the single path
 `giftipay-access.log` is ever named; CineFlow's log is read for comparison and
 never modified.
+
+---
+
+## Deployment record — 2026-09-05
+
+Live at **https://gift.historyfaster52.sbs**, deployed from
+`1ababd5` by workflow run 33962604144, verified green by run 33963786918
+(all 13 checks) on runner `ubuntu-4gb-hel1-10`.
+
+### Two application defects the deployment surfaced
+
+1. **The web unit would have bound the wrong port on a public interface.**
+   `giftipay-web.service` runs `npm run start`, and that script was
+   `next start -p 3000`. An explicit `-p` overrides `PORT`, so the service
+   would have listened on 3000 while Caddy proxies 4020 — and `next start`
+   with no `-H` binds `0.0.0.0`, putting an internal port on the public
+   interface. The script now honours `HOST` and `PORT`, and the deploy asserts
+   after every release that 4020 is bound on 127.0.0.1 and nowhere else.
+
+2. **Admin image uploads would have been deleted by the next deploy.**
+   The upload route writes to `public/media/uploads/YYYY/MM`, which lives
+   inside the release directory. Staging now symlinks that path to
+   `/var/lib/giftipay/uploads`, which survives releases and is already in the
+   unit's `ReadWritePaths`.
+
+### Verification defects worth remembering
+
+Three verification steps failed while the site was healthy, all from the same
+class of shell bug under `set -euo pipefail`:
+
+- `read -r a b c < <(curl -w …)` — curl's `-w` output has no trailing
+  newline, so `read` returns EOF (1) and kills the step *before* it prints
+  anything. Use a here-string.
+- `printf '%s' "$page" | grep …` on a 400 KB document exceeds `ARG_MAX`.
+  Write the body to a file.
+- A `grep` with no match, or a `head -N` that SIGPIPEs its producer, aborts
+  the whole step silently. Guard with `|| true` and check the value instead.
+
+A step that fails without printing its own diagnostics is almost always one
+of these, not the thing it was testing.
+
+### Gateway state in production (asserted, not assumed)
+
+```
+zarinpal   mode=production  configured=false  available=false
+wallet     mode=production  configured=true   available=true
+manual     mode=production  configured=false  available=false
+```
+
+The invariant the verification enforces: a gateway reporting
+`configured:false` must never be `available:true`, and a `sandbox` gateway
+must never be available in production.
