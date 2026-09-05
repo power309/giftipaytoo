@@ -118,6 +118,30 @@ jobs:
           echo "-- the one allowed command --"
           sudo -n /usr/local/sbin/giftipay-ctl status 2>&1 | head -20 || true
 
+      - name: Images referenced by the live site
+        run: |
+          set +e
+          curl -s -m 25 https://gift.historyfaster52.sbs/ -o /tmp/home.html
+          echo "homepage bytes: $(stat -c%s /tmp/home.html)"
+          echo "-- direct /media/... references --"
+          grep -oE '/media/[a-zA-Z0-9/_.-]+\.(webp|avif|svg|png|jpg)' /tmp/home.html | sort -u | head -8
+          echo "  count: $(grep -oE '/media/[a-zA-Z0-9/_.-]+' /tmp/home.html | sort -u | wc -l)"
+          echo "-- next/image references (percent-encoded) --"
+          grep -oE '/_next/image[^"]*' /tmp/home.html | sed 's/&amp;/\&/g' | sort -u | head -5
+          echo "  count: $(grep -oE '/_next/image' /tmp/home.html | wc -l)"
+          echo "-- any <img> or <source> at all --"
+          grep -oE '<(img|source)[^>]{0,160}' /tmp/home.html | head -6
+          echo "-- a product page, which definitely has a poster --"
+          SLUG="$(grep -oE '/product/[a-z0-9-]+' /tmp/home.html | head -1)"
+          echo "  product: $SLUG"
+          curl -s -m 25 "https://gift.historyfaster52.sbs$SLUG" -o /tmp/prod.html
+          grep -oE '/media/[a-zA-Z0-9/_.-]+\.(webp|avif|svg)' /tmp/prod.html | sort -u | head -5
+          grep -oE '/_next/image[^"]*' /tmp/prod.html | sed 's/&amp;/\&/g' | sort -u | head -3
+          echo "-- can a known media file be fetched directly? --"
+          curl -s -o /dev/null -w "  /media/banners/home-hero-pubg-desktop.webp -> %{http_code} %{content_type} %{size_download}B\n" \
+            -m 20 https://gift.historyfaster52.sbs/media/banners/home-hero-pubg-desktop.webp
+          exit 0
+
       - name: CineFlow is untouched
         run: |
           echo "cineflow is-active : $(systemctl is-active cineflow 2>&1 || true)"
